@@ -6,9 +6,17 @@
   "description": "Client-side WebGPU magnetostatic field solver and design test bed for axial-flux machines.",
   "license": "MIT",
   "scripts": {
-    "serve": "python3 -m http.server 8080",
-    "cli": "node cli/run.js",
+    "start": "node cli/serve.js",
     "test": "node tests/run-tests.js",
+    "test:quick": "node tests/run-tests.js --only analytic && node tests/run-tests.js --only ui",
+    "test:analytic": "node tests/run-tests.js --only analytic",
+    "test:reference": "node tests/run-tests.js --only reference",
+    "test:ui": "node tests/run-tests.js --only ui",
+    "test:convergence": "node tests/run-tests.js --only convergence",
+    "setup": "npm install && npx playwright install chromium",
+    "cli": "node cli/run.js",
+    "solve": "node cli/run.js solve",
+    "plan": "node cli/run.js plan",
     "capabilities": "node cli/run.js capabilities"
   },
   "devDependencies": {

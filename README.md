@@ -12,27 +12,53 @@ The same modules also run headless, so a script or an agent can drive the solver
       headless.html   the same solver with no interface, exposing window.AFS
       cli/run.js      a Playwright driver for the headless page
 
-## Running
+## Running it locally
 
-**In a browser.** Serve the folder from any static host and open `index.html`. WebGPU needs a secure
-context, so use HTTPS or `localhost` — `python3 -m http.server 8080` is enough. Use a recent Chrome
-or Edge, or Safari 26+.
+Everything below runs from the repository root, `axialflow/`.
 
-**Headless.** Once, `npm install && npx playwright install chromium`. Then:
+**First time:**
 
-    node cli/run.js capabilities
-    node cli/run.js plan src/cases/scale-370mm.json       # cells, memory, gap resolution — no solve
-    node cli/run.js solve src/cases/scale-370mm.json
-    node cli/run.js solve --set mesh.mode=graded --set design.rotor.airGap_mm=2
-    node cli/run.js sweep --path operatingPoint.currentAngle_elecDeg --from 0 --to 180 --step 15
-    node cli/run.js convergence src/cases/scale-370mm.json --factors 0.6,0.8,1,1.3
-    node cli/run.js validate
+    cd axialflow
+    npm run setup          # npm install + playwright's chromium, ~100 MB, once
+
+**Open the tool:**
+
+    npm start              # http://localhost:8080
+    npm start -- --open    # ...and open the browser for you
+    npm start -- --port 9000
+
+`localhost` is a secure context, which is all WebGPU needs. Nothing is compiled or bundled: edit a
+file under `src/`, reload the page, and the change is live. Use a recent Chrome or Edge, or
+Safari 26+.
+
+**Run the tests:**
+
+    npm test               # all four suites, ~45 s
+    npm run test:quick     # analytic + UI only, ~10 s — the one to use while editing
+    npm run test:ui
+    npm run test:convergence
+
+**Drive it headlessly:**
+
+    npm run capabilities
+    npm run plan -- src/cases/scale-370mm.json     # cells, memory, gap resolution — no solve
+    npm run solve -- src/cases/scale-370mm.json
+    npm run solve -- --set mesh.mode=graded --set design.rotor.airGap_mm=2
+    npm run cli -- sweep --path operatingPoint.currentAngle_elecDeg --from 0 --to 180 --step 15
+    npm run cli -- convergence src/cases/scale-370mm.json --factors 0.6,0.8,1,1.3
+    npm run cli -- validate
+
+The `--` is npm's separator: everything after it goes to the script. `npm run cli -- <command>`
+reaches any subcommand; `node cli/run.js <command>` works identically if you prefer.
 
 Progress goes to stderr and the JSON result to stdout, so results pipe cleanly. `--set <path>=<value>`
 overrides any field of the spec and is repeatable. `-o out.json` also writes the result to a file.
 
 The driver refuses to run on a software WebGPU adapter unless given `--allow-software`: SwiftShader
 produces correct fields but meaningless timings, and headless Chrome will silently fall back to it.
+
+**Hosting.** Copy the folder to any static host and open `index.html`. There is no build step, so
+what you develop against is what ships.
 
 ## The spec
 
