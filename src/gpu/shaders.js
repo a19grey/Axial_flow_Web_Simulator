@@ -16,10 +16,28 @@
  * 65535, which at 256 threads each is only 16.7 M cells — and the Biot-Savart kernel, at 64
  * threads, runs out at 4.2 M. Meshes larger than that are exactly the point of grading, so every
  * cell-wide kernel dispatches a 2D grid and linearises the index itself. */
-export const WP = `struct Params { nx:u32, ny:u32, nz:u32, count:u32, nParts:u32, sy:u32, sz:u32, gx:u32, h:f32, pad0:u32, pad1:u32, pad2:u32 };
+export const WP = `struct Params { nx:u32, ny:u32, nz:u32, count:u32, nParts:u32, sy:u32, sz:u32, gx:u32, h:f32, periodicY:u32, pad1:u32, pad2:u32 };
 @group(0) @binding(0) var<uniform> P: Params;
 fn cellIndex(gi: vec3u, wg: u32) -> u32 { return gi.y * P.gx * wg + gi.x; }
-fn partIndex(w: vec3u) -> u32 { return w.y * P.gx + w.x; }`;
+fn partIndex(w: vec3u) -> u32 { return w.y * P.gx + w.x; }
+
+/* Neighbour indices along axis 1, which wraps when that axis is periodic.
+ *
+ * A full machine in cylindrical coordinates is periodic in theta: the last angular row and the
+ * first are neighbours, with no boundary between them. The face coefficient is always the +theta
+ * coefficient of the *lower* cell, so cY[ym] is correct either way. The branch is uniform across
+ * the dispatch and the divisions are skipped entirely on a Cartesian mesh. */
+struct Nb { yp: u32, ym: u32 };
+fn yNeighbours(i: u32) -> Nb {
+  var n: Nb;
+  n.yp = i + P.sy; n.ym = i - P.sy;
+  if (P.periodicY == 1u) {
+    let iy = (i / P.nx) % P.ny;
+    if (iy == P.ny - 1u) { n.yp = i + P.sy - P.sz; }
+    if (iy == 0u) { n.ym = i - P.sy + P.sz; }
+  }
+  return n;
+}`;
 const RED = `
   sA[l] = a; sB[l] = c; workgroupBarrier();
   for (var s = 128u; s > 0u; s = s >> 1u) { if (l < s) { sA[l] += sA[l + s]; sB[l] += sB[l + s]; } workgroupBarrier(); }
@@ -60,9 +78,9 @@ fn main(${BI}) {
   if (i < P.count) {
     let d = diag[i];
     if (d > 0.0) {
-      let sy = P.sy; let sz = P.sz;
+      let sz = P.sz; let nb = yNeighbours(i);
       let v = d * p[i] - cX[i] * p[i + 1u] - cX[i - 1u] * p[i - 1u]
-                       - cY[i] * p[i + sy] - cY[i - sy] * p[i - sy]
+                       - cY[i] * p[nb.yp] - cY[nb.ym] * p[nb.ym]
                        - cZ[i] * p[i + sz] - cZ[i - sz] * p[i - sz];
       Ap[i] = v; a = p[i] * v;
     } else { Ap[i] = 0.0; }
@@ -118,7 +136,7 @@ fn main(@builtin(global_invocation_id) gi: vec3u) {
   let i = cellIndex(gi, 256u);
   if (i < P.count) { let d = diag[i]; if (d > 0.0) { p[i] = r[i] / d + scal[3] * p[i]; } }
 }`;
-SH.bs = `struct BSP { count:u32, nx:u32, ny:u32, segStart:u32, segEnd:u32, gx:u32, p1:u32, p2:u32, origin:vec4f, misc:vec4f };
+SH.bs = `struct BSP { count:u32, nx:u32, ny:u32, segStart:u32, segEnd:u32, gx:u32, cyl:u32, p2:u32, origin:vec4f, misc:vec4f };
 struct Seg { a: vec4f, b: vec4f };
 @group(0) @binding(0) var<uniform> Q: BSP;
 @group(0) @binding(1) var<storage, read> segs: array<Seg>;
@@ -134,7 +152,11 @@ fn main(@builtin(global_invocation_id) gi: vec3u, @builtin(local_invocation_inde
   let i = gi.y * Q.gx * 64u + gi.x;
   let ix = i % Q.nx; let iy = (i / Q.nx) % Q.ny; let iz = i / (Q.nx * Q.ny);
   let live = i < Q.count;
-  let pos = select(vec3f(0.0), vec3f(xc[ix], yc[iy], zc[iz]), live);
+  /* Axis tables hold (x, y, z) on a Cartesian mesh and (r, theta, z) on a cylindrical one. */
+  let ct = cos(yc[iy]); let st = sin(yc[iy]);
+  let cart = vec3f(xc[ix], yc[iy], zc[iz]);
+  let cyl = vec3f(xc[ix] * ct, xc[ix] * st, zc[iz]);
+  let pos = select(vec3f(0.0), select(cart, cyl, Q.cyl == 1u), live);
   let eps2 = Q.misc.x;
   var hA = vec3f(0.0); var hB = vec3f(0.0); var hC = vec3f(0.0);
   for (var base = Q.segStart; base < Q.segEnd; base = base + 64u) {
@@ -155,6 +177,13 @@ fn main(@builtin(global_invocation_id) gi: vec3u, @builtin(local_invocation_inde
     workgroupBarrier();
   }
   if (live) {
+    /* Store Hs in the mesh's own basis, so the assembly's face normals and the components line up.
+     * On a cylindrical mesh that means rotating (Hx, Hy) into (H_r, H_theta). */
+    if (Q.cyl == 1u) {
+      hA = vec3f( hA.x * ct + hA.y * st, -hA.x * st + hA.y * ct, hA.z);
+      hB = vec3f( hB.x * ct + hB.y * st, -hB.x * st + hB.y * ct, hB.z);
+      hC = vec3f( hC.x * ct + hC.y * st, -hC.x * st + hC.y * ct, hC.z);
+    }
     let o = 9u * i;
     H[o] += hA.x; H[o + 1u] += hA.y; H[o + 2u] += hA.z;
     H[o + 3u] += hB.x; H[o + 4u] += hB.y; H[o + 5u] += hB.z;
@@ -186,11 +215,12 @@ fn main(@builtin(global_invocation_id) gi: vec3u) {
   let i = cellIndex(gi, 256u);
   if (i < P.count) {
     if (diag[i] > 0.0) {
-      let sy = P.sy; let sz = P.sz;
+      let sz = P.sz; let nb = yNeighbours(i);
       // Magnetic charge at material boundaries: the net outward flux of (mu_f - 1) Hs over the
       // cell's six faces. sX/sY/sZ already carry (mu_f - 1) A_f, so no geometry factor is needed.
+      // Hs is stored in the mesh's own basis, so component 1 is Hs_theta on a cylindrical mesh.
       let s = sX[i] * 0.5 * (hs(i, 0u) + hs(i + 1u, 0u)) - sX[i - 1u] * 0.5 * (hs(i, 0u) + hs(i - 1u, 0u))
-            + sY[i] * 0.5 * (hs(i, 1u) + hs(i + sy, 1u)) - sY[i - sy] * 0.5 * (hs(i, 1u) + hs(i - sy, 1u))
+            + sY[i] * 0.5 * (hs(i, 1u) + hs(nb.yp, 1u)) - sY[nb.ym] * 0.5 * (hs(i, 1u) + hs(nb.ym, 1u))
             + sZ[i] * 0.5 * (hs(i, 2u) + hs(i + sz, 2u)) - sZ[i - sz] * 0.5 * (hs(i, 2u) + hs(i - sz, 2u));
       b[i] = -s;
     } else { b[i] = 0.0; }

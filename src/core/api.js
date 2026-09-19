@@ -34,6 +34,7 @@ export async function plan(specIn) {
 
   const res = meshResolution(mesh, p);
   const mem = bufferBytes(mesh.N);
+  const g0 = motorGeom(p);
 
   let caps = null;
   try { caps = await gpuCapabilities(); } catch { /* reported as a note below */ }
@@ -50,12 +51,36 @@ export async function plan(specIn) {
   // device memory, and a few GB will either fail to allocate or thrash.
   if (mem.total > 2 * 1024 ** 3) notes.push(
     `This mesh wants ${(mem.total / 1024 ** 3).toFixed(1)} GB of device memory across all buffers. Most GPUs will refuse or thrash; aim for well under 2 GB.`);
-  if (mesh.aspect > 40) notes.push(
+  /* An angular cell far coarser than a radial one is the usual way a cylindrical mesh comes out
+   * under-resolved: the radial and axial knobs look generous while the pole edges are smeared.
+   * Measured at the outer radius, where the arc is longest. */
+  if (mesh.kind === "cylindrical") {
+    const arcAtRim = mesh.x1 > 0 ? g0.Rro * (mesh.y1 - mesh.y0) / mesh.ny : 0;
+    const radial = 2 * g0.Rro / spec.mesh.activeCellsAcrossDiameter;
+    if (arcAtRim > 3 * radial) notes.push(
+      `Angular cells are ${(arcAtRim / radial).toFixed(1)}x longer than radial ones at the rim ` +
+      `(${arcAtRim.toFixed(2)} mm of arc against ${radial.toFixed(2)} mm). Raise mesh.cellsAcrossPoleArc ` +
+      `(now ${spec.mesh.cellsAcrossPoleArc}) until they are comparable, or the pole edges stay smeared.`);
+  }
+  /* Stretched cells slow the conjugate-gradient solve. In cylindrical coordinates the worst ratio
+   * is always near the axis, where the arc length goes to zero — inherent to the coordinate system
+   * and largely harmless, because the bore holds few cells and little field. Only say something
+   * when the stretching is in the far field, where it is a choice rather than a consequence. */
+  if (mesh.kind === "cylindrical") {
+    if (spec.mesh.farFieldCellFactor > 16) notes.push(
+      `Cells coarsen by ${spec.mesh.farFieldCellFactor}x into the far field. Past about 16x the conjugate-gradient solve starts needing noticeably more iterations for little saving.`);
+  } else if (mesh.aspect > 40) notes.push(
     `The worst cell aspect ratio is ${mesh.aspect.toFixed(0)}:1. Strongly stretched cells slow the conjugate-gradient solve; lowering mesh.farFieldCellFactor or mesh.growthRatio will trade cells for iterations.`);
 
-  // What a uniform grid would have cost for the same gap resolution, which is the case for grading.
-  const hGap = p.gap / Math.max(1, spec.mesh.mode === "graded" ? spec.mesh.cellsAcrossAirGap : res.airGap);
-  const uniformEquivalent = Math.round((mesh.x1 - mesh.x0) / hGap) * Math.round((mesh.y1 - mesh.y0) / hGap) * Math.round((mesh.z1 - mesh.z0) / hGap);
+  /* What a uniform Cartesian grid would have cost for the same gap resolution — the case for
+   * meshing at all. Measured over the Cartesian bounding box, so a cylindrical mesh is compared
+   * against the same box a uniform grid would have had to fill. */
+  const hGap = p.gap / Math.max(1, spec.mesh.mode === "uniform" ? res.airGap : spec.mesh.cellsAcrossAirGap);
+  const box = mesh.kind === "cylindrical"
+    ? [2 * mesh.x1, 2 * mesh.x1, mesh.z1 - mesh.z0]
+    : [mesh.x1 - mesh.x0, mesh.y1 - mesh.y0, mesh.z1 - mesh.z0];
+  // A sector mesh only ever holds its own share of the machine.
+  const uniformEquivalent = Math.round(box[0] / hGap) * Math.round(box[1] / hGap) * Math.round(box[2] / hGap);
 
   return {
     specHash: specHash(spec),

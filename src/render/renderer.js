@@ -14,7 +14,7 @@
 import { $ } from "../ui/dom.js";
 import { INF, DIV, lutRow, css, fmtB, pctl } from "../ui/format.js";
 import { initGPU } from "../gpu/device.js";
-import { locate } from "../core/mesh.js";
+import { locate, CYLINDRICAL } from "../core/mesh.js";
 import { buildMeshes } from "./meshes.js";
 
 /* ---- small linear algebra, column-major ---- */
@@ -41,31 +41,84 @@ const M4 = {
   }
 };
 
-/* ---- field lines: RK2 streamlines of B, seeded in proportion to flux ---- */
-function traceLines(sol, bScale) {
-  const { job, Bx, By, Bz } = sol, mesh = job.mesh;
-  const { nx, ny, nz, xc, yc, zc, x0, y0, z0, x1, y1, z1 } = mesh;
-  const m = 1.5 * mesh.hMax;
+/* Trilinear sampling of the solved field at an arbitrary Cartesian point, returning Cartesian
+ * components.
+ *
+ * On a graded mesh the bracketing cell has to be found by search rather than division, and the
+ * weight is the fraction of the centre-to-centre distance rather than of a fixed cell size. On a
+ * cylindrical mesh the point is first converted to (r, theta, z), theta is folded into the modelled
+ * span — which is exactly what periodicity means, and is how a one-pole-pair sector still draws the
+ * whole machine — and the interpolated (B_r, B_theta) are rotated back into (B_x, B_y).
+ */
+export function makeSampler(sol) {
+  const { job, Bx, By, Bz } = sol, m = job.mesh;
+  const { nx, ny, nz, xc, yc, zc } = m;
+  const cyl = m.kind === CYLINDRICAL;
+  const span = m.y1 - m.y0;
 
-  // Trilinear interpolation between cell centres. On a graded mesh the bracketing cell has to be
-  // found by search rather than division, and the weight is the fraction of the centre-to-centre
-  // distance rather than of a fixed cell size.
+  // Bracket a value between cell centres: returns the lower index and the fraction across.
   const brk = (c, n, v) => {
     if (v <= c[0]) return [0, 0];
     if (v >= c[n - 1]) return [n - 2, 1];
     const i = locate(c, n - 1, v);
     return [i, (v - c[i]) / (c[i + 1] - c[i])];
   };
-  const S = (x, y, z, o) => {
-    const [i, fu] = brk(xc, nx, x), [j, fv] = brk(yc, ny, y), [k, fw] = brk(zc, nz, z);
-    o[0] = o[1] = o[2] = 0;
-    for (let c = 0; c < 8; c++) {
-      const di = c & 1, dj = (c >> 1) & 1, dk = c >> 2, wt = (di ? fu : 1 - fu) * (dj ? fv : 1 - fv) * (dk ? fw : 1 - fw);
-      const q = ((k + dk) * ny + j + dj) * nx + i + di;
-      o[0] += wt * Bx[q]; o[1] += wt * By[q]; o[2] += wt * Bz[q];
+  // Angular bracket, wrapping between the last cell centre and the first across the seam.
+  const brkTheta = (v) => {
+    let t = m.y0 + (((v - m.y0) % span) + span) % span;
+    if (t < yc[0]) {
+      const d = (yc[0] - m.y0) + (m.y1 - yc[ny - 1]);
+      return [ny - 1, d > 0 ? ((t - m.y0) + (m.y1 - yc[ny - 1])) / d : 0, true];
     }
+    if (t > yc[ny - 1]) {
+      const d = (yc[0] - m.y0) + (m.y1 - yc[ny - 1]);
+      return [ny - 1, d > 0 ? (t - yc[ny - 1]) / d : 0, true];
+    }
+    const j = locate(yc, ny - 1, t);
+    return [j, (t - yc[j]) / (yc[j + 1] - yc[j]), false];
+  };
+
+  return function sample(x, y, z, o) {
+    let i, fu, j, fv, wrapJ = false;
+    let ct = 1, st = 0;
+    if (cyl) {
+      const r = Math.hypot(x, y);
+      if (r > 1e-9) { ct = x / r; st = y / r; }
+      [i, fu] = brk(xc, nx, r);
+      [j, fv, wrapJ] = brkTheta(Math.atan2(y, x));
+    } else {
+      [i, fu] = brk(xc, nx, x);
+      [j, fv] = brk(yc, ny, y);
+    }
+    const [k, fw] = brk(zc, nz, z);
+    const jNext = wrapJ ? 0 : j + 1;
+    let b0 = 0, b1 = 0, b2 = 0;
+    for (let c = 0; c < 8; c++) {
+      const di = c & 1, dj = (c >> 1) & 1, dk = c >> 2;
+      const wt = (di ? fu : 1 - fu) * (dj ? fv : 1 - fv) * (dk ? fw : 1 - fw);
+      if (wt === 0) continue;
+      const q = ((k + dk) * ny + (dj ? jNext : j)) * nx + i + di;
+      b0 += wt * Bx[q]; b1 += wt * By[q]; b2 += wt * Bz[q];
+    }
+    if (cyl) { o[0] = b0 * ct - b1 * st; o[1] = b0 * st + b1 * ct; }
+    else { o[0] = b0; o[1] = b1; }
+    o[2] = b2;
     return o;
   };
+}
+
+/* The Cartesian bounding box of the mesh, which is what the 3D view draws into. */
+export function boundingBox(m) {
+  if (m.kind === CYLINDRICAL) return [[-m.x1, -m.x1, m.z0], [m.x1, m.x1, m.z1]];
+  return [[m.x0, m.y0, m.z0], [m.x1, m.y1, m.z1]];
+}
+
+/* ---- field lines: RK2 streamlines of B, seeded in proportion to flux ---- */
+function traceLines(sol, bScale) {
+  const { job } = sol, mesh = job.mesh;
+  const bb = boundingBox(mesh);
+  const m = 1.5 * mesh.hMax;
+  const S = makeSampler(sol);
   let zs, rA, rB;
   if (job.kind === "motor") { zs = (Math.max(...job.zLay) + job.g.zTB) / 2; rA = job.p.ri + 0.5; rB = job.p.ro - 0.5; }
   else if (job.kind === "sphere") { zs = 0; rA = 0; rB = 1.8 * job.a; }
@@ -87,7 +140,8 @@ function traceLines(sol, bScale) {
     const b2 = S(mid[0], mid[1], mid[2], o), l2 = Math.hypot(...b2); if (l2 < floor) return null;
     return [[p[0] + sgn * b2[0] / l2 * ds, p[1] + sgn * b2[1] / l2 * ds, p[2] + sgn * b2[2] / l2 * ds], l2];
   };
-  const inside = p => p[0] > x0 + m && p[0] < x1 - m && p[1] > y0 + m && p[1] < y1 - m && p[2] > z0 + m && p[2] < z1 - m;
+  const inside = p => p[0] > bb[0][0] + m && p[0] < bb[1][0] - m && p[1] > bb[0][1] + m && p[1] < bb[1][1] - m
+                   && p[2] > bb[0][2] + m && p[2] < bb[1][2] - m;
   for (const s0 of seeds) {
     for (const sgn of [1, -1]) {
       let p = s0, lp = Math.hypot(...S(p[0], p[1], p[2], o));
@@ -325,47 +379,26 @@ export function buildSlices() {
 const VIZ_TEXELS = 160 * 160 * 160;
 
 function resampleField(sol, mesh) {
-  const { Bx, By, Bz } = sol;
-  const ex = mesh.x1 - mesh.x0, ey = mesh.y1 - mesh.y0, ez = mesh.z1 - mesh.z0;
+  const bb = boundingBox(mesh);
+  const ex = bb[1][0] - bb[0][0], ey = bb[1][1] - bb[0][1], ez = bb[1][2] - bb[0][2];
   // Keep the texel aspect close to cubic, then scale the whole lattice into the budget.
   const scale = Math.cbrt(VIZ_TEXELS / (ex * ey * ez));
-  const clampDim = (e, n) => Math.max(8, Math.min(n, Math.round(e * scale)));
-  const tx = clampDim(ex, mesh.nx), ty = clampDim(ey, mesh.ny), tz = clampDim(ez, mesh.nz);
+  const dim = e => Math.max(8, Math.min(256, Math.round(e * scale)));
+  const tx = dim(ex), ty = dim(ey), tz = dim(ez);
 
-  // Index tables: for each texel, the mesh cell whose centre bracket contains it, plus the weight.
-  const table = (c, n, t, a, b) => {
-    const idx = new Int32Array(t), frac = new Float32Array(t);
-    for (let i = 0; i < t; i++) {
-      const v = a + (b - a) * (i + 0.5) / t;
-      if (v <= c[0]) { idx[i] = 0; frac[i] = 0; }
-      else if (v >= c[n - 1]) { idx[i] = n - 2; frac[i] = 1; }
-      else { const k = locate(c, n - 1, v); idx[i] = k; frac[i] = (v - c[k]) / (c[k + 1] - c[k]); }
-    }
-    return { idx, frac };
-  };
-  const TX = table(mesh.xc, mesh.nx, tx, mesh.x0, mesh.x1);
-  const TY = table(mesh.yc, mesh.ny, ty, mesh.y0, mesh.y1);
-  const TZ = table(mesh.zc, mesh.nz, tz, mesh.z0, mesh.z1);
-
+  const S = makeSampler(sol);
+  const o = [0, 0, 0];
   const data = new Uint16Array(4 * tx * ty * tz);
-  const nx = mesh.nx, ny = mesh.ny;
   for (let k = 0; k < tz; k++) {
-    const kz = TZ.idx[k], fw = TZ.frac[k];
+    const z = bb[0][2] + ez * (k + 0.5) / tz;
     for (let j = 0; j < ty; j++) {
-      const jy = TY.idx[j], fv = TY.frac[j];
+      const y = bb[0][1] + ey * (j + 0.5) / ty;
       for (let i = 0; i < tx; i++) {
-        const ix = TX.idx[i], fu = TX.frac[i];
-        let bx = 0, by = 0, bz = 0;
-        for (let c = 0; c < 8; c++) {
-          const di = c & 1, dj = (c >> 1) & 1, dk = c >> 2;
-          const wt = (di ? fu : 1 - fu) * (dj ? fv : 1 - fv) * (dk ? fw : 1 - fw);
-          if (wt === 0) continue;
-          const q = ((kz + dk) * ny + jy + dj) * nx + ix + di;
-          bx += wt * Bx[q]; by += wt * By[q]; bz += wt * Bz[q];
-        }
-        bx *= 1e3; by *= 1e3; bz *= 1e3;
-        const o = 4 * ((k * ty + j) * tx + i);
-        data[o] = half(bx); data[o + 1] = half(by); data[o + 2] = half(bz); data[o + 3] = half(Math.hypot(bx, by, bz));
+        const x = bb[0][0] + ex * (i + 0.5) / tx;
+        S(x, y, z, o);
+        const bx = o[0] * 1e3, by = o[1] * 1e3, bz = o[2] * 1e3;
+        const q = 4 * ((k * ty + j) * tx + i);
+        data[q] = half(bx); data[q + 1] = half(by); data[q + 2] = half(bz); data[q + 3] = half(Math.hypot(bx, by, bz));
       }
     }
   }
@@ -375,15 +408,18 @@ function resampleField(sol, mesh) {
 export function updateScene(sol, keepView) {
   if (!V.ok) return;
   const job = sol.job, mesh = job.mesh;
-  const { nx, ny, nz, x0, y0, z0, x1, y1, z1 } = mesh;
+  const { nx, ny, nz } = mesh;
+  const cyl = mesh.kind === CYLINDRICAL;
   V.job = job;
-  V.box = [[x0, y0, z0], [x1, y1, z1]];
+  V.box = boundingBox(mesh);
 
   // Colour scale from the field inside the machine, ignoring the far field where nothing happens.
   const mag = [], bzs = [];
-  for (let iz = 1; iz < nz - 1; iz += 1) for (let iy = 1; iy < ny - 1; iy += 2) for (let ix = 1; ix < nx - 1; ix += 2) {
-    const x = mesh.xc[ix], y = mesh.yc[iy], z = mesh.zc[iz];
-    if (job.kind === "motor" && (Math.hypot(x, y) > job.g.Rro + 4 || z < (job.p.back ? job.g.zBB : -1) - 3 || z > job.g.zYT + 3)) continue;
+  const stepY = cyl ? 1 : 2;
+  for (let iz = 1; iz < nz - 1; iz += 1) for (let iy = 1; iy < ny - 1; iy += stepY) for (let ix = 1; ix < nx - 1; ix += 2) {
+    const r = cyl ? mesh.xc[ix] : Math.hypot(mesh.xc[ix], mesh.yc[iy]);
+    const z = mesh.zc[iz];
+    if (job.kind === "motor" && (r > job.g.Rro + 4 || z < (job.p.back ? job.g.zBB : -1) - 3 || z > job.g.zYT + 3)) continue;
     const k = (iz * ny + iy) * nx + ix; mag.push(Math.hypot(sol.Bx[k], sol.By[k], sol.Bz[k])); bzs.push(Math.abs(sol.Bz[k]));
   }
   V.bScale = pctl(mag, 0.99) * 1e3; V.bzScale = pctl(bzs, 0.99) * 1e3;

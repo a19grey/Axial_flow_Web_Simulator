@@ -42,6 +42,7 @@ export function ensureBuffers(G, job) {
   const ab = new ArrayBuffer(48), u = new Uint32Array(ab), f = new Float32Array(ab);
   u.set([m.nx, m.ny, m.nz, N, parts, m.sy, m.sz, grid.gx]);
   f[8] = m.hMin * 1e-3;   // retained for shaders that want a representative length
+  u[9] = m.periodicY ? 1 : 0;
   d.queue.writeBuffer(B.params, 0, ab);
   writeMeshCoords(G, B, m);
 
@@ -65,12 +66,20 @@ export function ensureBuffers(G, job) {
   return B;
 }
 
-/* The coordinate tables change whenever the mesh is regraded, even at the same cell counts. */
+/* Cell-centre coordinate tables for the Biot-Savart kernel. They change whenever the mesh is
+ * regraded, even at the same cell counts.
+ *
+ * Length axes are converted to metres; an angular axis is radians and must be left alone. */
 function writeMeshCoords(G, B, m) {
-  const f32 = a => { const o = new Float32Array(a.length); for (let i = 0; i < a.length; i++) o[i] = a[i] * 1e-3; return o; };
-  G.device.queue.writeBuffer(B.xc, 0, f32(m.xc));
-  G.device.queue.writeBuffer(B.yc, 0, f32(m.yc));
-  G.device.queue.writeBuffer(B.zc, 0, f32(m.zc));
+  const pow = m.coordPow || [1, 1, 1];
+  const f32 = (a, p) => {
+    const f = p === 0 ? 1 : 1e-3, o = new Float32Array(a.length);
+    for (let i = 0; i < a.length; i++) o[i] = a[i] * f;
+    return o;
+  };
+  G.device.queue.writeBuffer(B.xc, 0, f32(m.xc, pow[0]));
+  G.device.queue.writeBuffer(B.yc, 0, f32(m.yc, pow[1]));
+  G.device.queue.writeBuffer(B.zc, 0, f32(m.zc, pow[2]));
 }
 
 /* Split a flat thread count across a 2D workgroup grid within the device's per-dimension cap. */

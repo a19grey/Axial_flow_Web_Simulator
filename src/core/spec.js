@@ -49,6 +49,9 @@ export function defaultSpec() {
       /* "uniform" reproduces the original single-cell-size grid exactly.
        * "graded" sizes each axis from the geometry: fine through the air gap and the thin parts,
        * stretched into the far field, with every material interface landing on a mesh face. */
+      /* "cylindrical" meshes in (r, theta, z), where the bore, the rim and the pole arcs are all
+       * coordinate surfaces, so material fractions are exact rather than staircased, and one pole
+       * pair can stand in for the whole machine. */
       mode: "uniform",
       cellsAcrossDiameter: 128,        // uniform mode: cells across the whole box
       marginFactor: 0.4,               // outer-box margin as a fraction of outer radius
@@ -62,6 +65,8 @@ export function defaultSpec() {
       cellsAcrossPcb: 4,
       cellsAcrossBackPlate: 3,
       cellsAcrossBackGap: 2,
+      cellsAcrossPoleArc: 24,          // cylindrical: angular cells per pole pitch
+      sector: true,                    // cylindrical: model one pole pair rather than the full turn
       growthRatio: 1.2,                // largest ratio between neighbouring cell sizes
       farFieldCellFactor: 8,           // far-field cell size, as a multiple of the in-plane size
       maxCells: 40e6                   // refuse to build a mesh larger than this
@@ -113,13 +118,15 @@ export function normalizeSpec(input) {
   s.operatingPoint.currentAngle_elecDeg = num(op.currentAngle_elecDeg, 45);
 
   const me = src.mesh ?? {}, dm = s.mesh;
-  dm.mode = me.mode === "graded" ? "graded" : "uniform";
+  dm.mode = ["graded", "cylindrical"].includes(me.mode) ? me.mode : "uniform";
   dm.cellsAcrossDiameter = Math.max(16, Math.round(num(me.cellsAcrossDiameter, dm.cellsAcrossDiameter)));
   dm.marginFactor = clampMin(me.marginFactor, 0, dm.marginFactor);
   dm.marginMin_mm = clampMin(me.marginMin_mm, 0, dm.marginMin_mm);
   dm.activeCellsAcrossDiameter = Math.max(16, Math.round(num(me.activeCellsAcrossDiameter, dm.activeCellsAcrossDiameter)));
-  for (const k of ["cellsAcrossAirGap", "cellsAcrossPoleHeight", "cellsAcrossYoke", "cellsAcrossPcb", "cellsAcrossBackPlate", "cellsAcrossBackGap"])
+  for (const k of ["cellsAcrossAirGap", "cellsAcrossPoleHeight", "cellsAcrossYoke", "cellsAcrossPcb",
+                   "cellsAcrossBackPlate", "cellsAcrossBackGap", "cellsAcrossPoleArc"])
     dm[k] = Math.max(1, Math.round(num(me[k], dm[k])));
+  dm.sector = me.sector === undefined ? dm.sector : !!me.sector;
   dm.growthRatio = Math.min(3, Math.max(1.02, num(me.growthRatio, dm.growthRatio)));
   dm.farFieldCellFactor = Math.min(64, Math.max(1, num(me.farFieldCellFactor, dm.farFieldCellFactor)));
   dm.maxCells = Math.max(1e4, num(me.maxCells, dm.maxCells));

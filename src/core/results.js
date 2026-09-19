@@ -35,6 +35,11 @@ export function resultsSummary(sol) {
     phaseCurrents_A: sol.I ? [...sol.I] : null,
     mesh: {
       mode: job.p.mesh?.mode ?? "uniform",
+      coordinates: mesh.kind,
+      // How many copies of the modelled span make a full turn. A periodic sector solves one and
+      // the torque is scaled up; everything else models the whole machine.
+      sectors: mesh.sectors,
+      periodicAngle: !!mesh.periodicY,
       cells: sol.N,
       dimensions: [mesh.nx, mesh.ny, mesh.nz],
       smallestCell_mm: mesh.hMin,

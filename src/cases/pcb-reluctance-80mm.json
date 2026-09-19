@@ -4,16 +4,55 @@
   "name": "PCB reluctance, 80 mm",
   "notes": "The original design the tool was written for: a small coreless PCB stator with an iron-filled-polymer salient-pole rotor. Solves in well under a second and is the default regression case.",
   "design": {
-    "stator": { "poles": 4, "copperLayers": 2, "innerRadius_mm": 15, "outerRadius_mm": 40,
-                "turnsPerLayer": 10, "peakCurrent_A": 5, "thickness_mm": 1.6,
-                "tracePitch_mm": 0.5, "traceWidth_mm": 0.34, "edgeMargin_mm": 0.4 },
-    "rotor": { "airGap_mm": 3, "mu_r": 20, "poleHeight_mm": 3, "yokeThickness_mm": 4, "poleArcFraction": 0.5 },
-    "backPlate": { "enabled": true, "mu_r": 20, "thickness_mm": 4, "gapBelowPcb_mm": 1 }
+    "stator": {
+      "poles": 4,
+      "copperLayers": 2,
+      "innerRadius_mm": 15,
+      "outerRadius_mm": 40,
+      "turnsPerLayer": 10,
+      "peakCurrent_A": 5,
+      "thickness_mm": 1.6,
+      "tracePitch_mm": 0.5,
+      "traceWidth_mm": 0.34,
+      "edgeMargin_mm": 0.4
+    },
+    "rotor": {
+      "airGap_mm": 3,
+      "mu_r": 20,
+      "poleHeight_mm": 3,
+      "yokeThickness_mm": 4,
+      "poleArcFraction": 0.5
+    },
+    "backPlate": {
+      "enabled": true,
+      "mu_r": 20,
+      "thickness_mm": 4,
+      "gapBelowPcb_mm": 1
+    }
   },
-  "operatingPoint": { "rotorAngle_deg": 0, "currentAngle_elecDeg": 45 },
-  "mesh": { "mode": "graded", "activeCellsAcrossDiameter": 160, "cellsAcrossAirGap": 6,
-            "cellsAcrossPoleHeight": 4, "cellsAcrossYoke": 3, "cellsAcrossPcb": 4,
-            "cellsAcrossBackPlate": 3, "cellsAcrossBackGap": 2,
-            "growthRatio": 1.2, "farFieldCellFactor": 8, "maxCells": 40000000 },
-  "solver": { "tolerance": 1e-5, "maxIterations": 4000, "checkInterval": 32, "stallPatience": 6 }
+  "operatingPoint": {
+    "rotorAngle_deg": 0,
+    "currentAngle_elecDeg": 45
+  },
+  "mesh": {
+    "mode": "cylindrical",
+    "activeCellsAcrossDiameter": 160,
+    "cellsAcrossAirGap": 6,
+    "cellsAcrossPoleHeight": 4,
+    "cellsAcrossYoke": 3,
+    "cellsAcrossPcb": 4,
+    "cellsAcrossBackPlate": 3,
+    "cellsAcrossBackGap": 2,
+    "growthRatio": 1.2,
+    "farFieldCellFactor": 8,
+    "maxCells": 40000000,
+    "cellsAcrossPoleArc": 64,
+    "sector": true
+  },
+  "solver": {
+    "tolerance": 1e-05,
+    "maxIterations": 4000,
+    "checkInterval": 32,
+    "stallPatience": 6
+  }
 }

@@ -96,6 +96,36 @@ async function main() {
     ok("graded is within a few percent of the converged answer", eG < CROSS_MESH_PCT, `${eG.toFixed(2)}%`);
     report.cases.accuracyPerCell = { reference: ref, uniform: uni, graded: gra, uniformError_pct: eU, gradedError_pct: eG };
 
+    /* ---- 1b. the cylindrical mesh ----------------------------------------------------------------
+     * Two properties that have to hold exactly rather than approximately, plus one that has to
+     * hold to discretization error. */
+    process.stderr.write("\n1b. cylindrical coordinates\n");
+
+    // A one-pole-pair sector with periodic boundaries must reproduce the full turn to the last
+    // digit: same mesh spacing, same field, half or a quarter of the cells. Anything else means
+    // the periodic wrap or the sector scaling is wrong.
+    const cylFull = await solve({ ...small, mesh: { ...small.mesh, mode: "cylindrical", sector: false } });
+    const cylSec = await solve({ ...small, mesh: { ...small.mesh, mode: "cylindrical", sector: true } });
+    const secErr = Math.abs(cylSec.torque_mNm - cylFull.torque_mNm) / Math.abs(cylFull.torque_mNm);
+    process.stderr.write(`     full turn  ${cylFull.mesh.cells.toLocaleString().padStart(9)} cells -> ${cylFull.torque_mNm.toFixed(8)} mN.m\n`);
+    process.stderr.write(`     one sector ${cylSec.mesh.cells.toLocaleString().padStart(9)} cells -> ${cylSec.torque_mNm.toFixed(8)} mN.m\n`);
+    ok("a periodic sector reproduces the full turn exactly", secErr < 1e-6,
+       `${secErr.toExponential(1)} relative, ${(cylFull.mesh.cells / cylSec.mesh.cells).toFixed(0)}x fewer cells`);
+    ok("the sector really is a fraction of the machine", cylSec.mesh.sectors > 1, `1/${cylSec.mesh.sectors}`);
+
+    // Cylindrical and Cartesian discretize the same physics in different coordinates, with
+    // different staircasing and different stress surfaces. Agreeing is a genuinely independent
+    // check that neither is wrong, in a way that refining either one alone cannot be.
+    const cylRef = await solve({ ...small, mesh: { ...small.mesh, mode: "cylindrical",
+      activeCellsAcrossDiameter: 260, cellsAcrossPoleArc: 96, cellsAcrossAirGap: 10,
+      cellsAcrossPoleHeight: 7, cellsAcrossYoke: 5, cellsAcrossPcb: 6, cellsAcrossBackPlate: 5 } });
+    const crossErr = Math.abs(cylRef.torque_mNm - ref.torque_mNm) / Math.abs(ref.torque_mNm) * 100;
+    process.stderr.write(`     cartesian  ${ref.mesh.cells.toLocaleString().padStart(9)} cells -> ${ref.torque_mNm.toFixed(5)} mN.m\n`);
+    process.stderr.write(`     cylindrical${cylRef.mesh.cells.toLocaleString().padStart(9)} cells -> ${cylRef.torque_mNm.toFixed(5)} mN.m\n`);
+    ok("cylindrical and Cartesian agree on a converged answer", crossErr < CROSS_MESH_PCT,
+       `${crossErr.toFixed(2)}% apart, using ${(ref.mesh.cells / cylRef.mesh.cells).toFixed(0)}x fewer cells`);
+    report.cases.cylindrical = { full: cylFull, sector: cylSec, refined: cylRef, crossError_pct: crossErr };
+
     /* ---- 2. refinement studies ----------------------------------------------------------------- */
     for (const [name, spec, factors] of [
       ["80 mm PCB reluctance", small, quick ? [0.7, 1, 1.4] : [0.6, 0.8, 1, 1.4, 2]],

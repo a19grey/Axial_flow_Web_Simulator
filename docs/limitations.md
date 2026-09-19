@@ -45,7 +45,10 @@ flux density. The nonlinear machinery is a μ(|B|) update loop around the existi
 the next substantial piece of physics work; note that it interacts with the ceiling above, since
 the materials most worth saturating are also the ones past it until the formulation changes.
 
-## Cartesian mesh: in-plane boundaries are still staircased
+## Cartesian modes: in-plane boundaries are staircased
+
+*Fixed by `mesh.mode: "cylindrical"`, which is now the default for both presets. This section
+describes the Cartesian modes, which are kept for cross-checking and for non-annular geometry.*
 
 Grading removes the z-direction staircase completely, because the interfaces that matter there — the
 PCB faces, the pole face, the yoke, the back plate — are planes, and the mesh generator makes every
@@ -58,9 +61,15 @@ their cells carry a blended permeability. In-plane refinement converges smoothly
 from 100 to 400, with the steps shrinking), so this is an accuracy cost rather than a correctness
 problem — but it is the dominant remaining discretization error.
 
-A cylindrical (r, θ, z) backend against the same mesh interface would fix it: the bore, the rim and
-the pole arcs all become coordinate surfaces, and one pole pair could be modelled with anti-periodic
-boundaries instead of the whole machine. It is designed but not built.
+The cylindrical backend fixes it: the bore, the rim and the pole arcs are coordinate surfaces, the
+filled fraction of a cell is the product of three exact one-dimensional overlaps, and one pole pair
+is modelled with periodic boundaries instead of the whole machine.
+
+What cylindrical costs, in exchange: cells near the axis are very anisotropic, because the arc
+length goes to zero there. That is inherent to the coordinate system. It shows up as a high reported
+aspect ratio and somewhat more conjugate-gradient iterations, and it is largely harmless — the bore
+holds few cells and little field. It also means a cylindrical mesh cannot represent a machine that
+is not roughly annular.
 
 Uniform mode is retained, and is still the right choice for a small machine or for cross-checking
 the graded path, but it does not scale: the 370 mm case needs 54 million cells for three across the

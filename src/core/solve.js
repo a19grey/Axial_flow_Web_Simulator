@@ -63,24 +63,45 @@ export async function solveJob(job, opts = {}) {
  * continuous across material edges. */
 export function fieldB(job, Hs, phi) {
   const m = job.mesh, mu = job.mu;
-  const { nx, ny, nz, N, sy, sz } = m;
+  const { nx, ny, nz, N, sy, sz, periodicY } = m;
+  // On a cylindrical mesh these are (B_r, B_theta, B_z) in the mesh's own basis.
   const Bx = new Float32Array(N), By = new Float32Array(N), Bz = new Float32Array(N);
+  const D = m.distM;
+  const cyl = m.kind === "cylindrical";
 
-  // Centre-to-centre distances in metres, one lookup per axis.
-  const dxf = m.dxf, dyf = m.dyf, dzf = m.dzf;
-  const fl = (k, s, c, d) => {
-    const a = mu[k], b = mu[k + s];
-    return MU0 * (2 * a * b / (a + b)) * (0.5 * (Hs[3 * k + c] + Hs[3 * (k + s) + c]) - (phi[k + s] - phi[k]) / (d * 1e-3));
+  // Flux density on the face between cell k and cell k + step, given the distance across it.
+  const fl = (k, step, comp, d) => {
+    const a = mu[k], b = mu[k + step];
+    return MU0 * (2 * a * b / (a + b)) * (0.5 * (Hs[3 * k + comp] + Hs[3 * (k + step) + comp]) - (phi[k + step] - phi[k]) / d);
   };
+
   // The cell centre lies exactly midway between its own two faces on each axis, whatever the
   // grading, so averaging the two face values stays the right interpolation.
-  for (let iz = 1; iz < nz - 1; iz++) for (let iy = 1; iy < ny - 1; iy++) {
-    const base = (iz * ny + iy) * nx;
-    for (let ix = 1; ix < nx - 1; ix++) {
-      const k = base + ix;
-      Bx[k] = 0.5 * (fl(k, 1, 0, dxf[ix]) + fl(k - 1, 1, 0, dxf[ix - 1]));
-      By[k] = 0.5 * (fl(k, sy, 1, dyf[iy]) + fl(k - sy, sy, 1, dyf[iy - 1]));
-      Bz[k] = 0.5 * (fl(k, sz, 2, dzf[iz]) + fl(k - sz, sz, 2, dzf[iz - 1]));
+  const iy0 = periodicY ? 0 : 1, iy1 = periodicY ? ny : ny - 1;
+  // A cylindrical mesh has no boundary at the axis: the r = 0 face carries no flux, and B_r there
+  // is zero by symmetry, so cell 0 averages that zero against its outer face.
+  const ix0 = cyl ? 0 : 1;
+
+  for (let iz = 1; iz < nz - 1; iz++) {
+    const d0k = D[0].k[iz], d1k = D[1].k[iz], d2 = D[2].k[iz], d2m = D[2].k[iz - 1];
+    for (let iy = iy0; iy < iy1; iy++) {
+      const base = (iz * ny + iy) * nx;
+      const d0jk = D[0].j[iy] * d0k;
+      // Neighbour offsets along the wrapping axis, and the face distances either side.
+      const lastY = iy === ny - 1;
+      const yp = lastY ? sy - sz : sy;              // offset to the +y neighbour
+      const ym = iy === 0 ? sy * (ny - 1) : -sy;    // offset to the -y neighbour
+      const iym = iy === 0 ? ny - 1 : iy - 1;
+      const d1p = D[1].j[iy] * d1k;                 // distance across this cell's +y face
+      const d1m = D[1].j[iym] * d1k;                // ...and across the one below it
+      for (let ix = ix0; ix < nx - 1; ix++) {
+        const k = base + ix;
+        const outerR = fl(k, 1, 0, D[0].i[ix] * d0jk);
+        const innerR = ix === 0 ? 0 : fl(k - 1, 1, 0, D[0].i[ix - 1] * d0jk);
+        Bx[k] = 0.5 * (outerR + innerR);
+        By[k] = 0.5 * (fl(k, yp, 1, D[1].i[ix] * d1p) + fl(k + ym, -ym, 1, D[1].i[ix] * d1m));
+        Bz[k] = 0.5 * (fl(k, sz, 2, d2) + fl(k - sz, sz, 2, d2m));
+      }
     }
   }
   return { Bx, By, Bz };

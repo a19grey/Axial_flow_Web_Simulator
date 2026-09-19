@@ -35,18 +35,27 @@ export const CONTROLS = {
   mPcb:    ["mesh.cellsAcrossPcb", "number"],
   mBack:   ["mesh.cellsAcrossBackPlate", "number"],
   mGrowth: ["mesh.growthRatio", "number"],
-  mFar:    ["mesh.farFieldCellFactor", "number"]
+  mFar:    ["mesh.farFieldCellFactor", "number"],
+  mArc:    ["mesh.cellsAcrossPoleArc", "number"],
+  mSector: ["mesh.sector", "check"]
 };
 
 /* Mesh mode is a segmented control rather than an input, so it is held here. */
 export const meshMode = { value: "uniform" };
 
+export const MESH_MODES = ["uniform", "graded", "cylindrical"];
+
 export function setMeshMode(mode) {
-  meshMode.value = mode === "graded" ? "graded" : "uniform";
-  document.querySelectorAll("[data-mesh]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mesh === meshMode.value)));
-  const u = $("#meshUniform"), g = $("#meshGraded");
-  if (u) u.hidden = meshMode.value !== "uniform";
-  if (g) g.hidden = meshMode.value !== "graded";
+  meshMode.value = MESH_MODES.includes(mode) ? mode : "uniform";
+  const v = meshMode.value, cyl = v === "cylindrical";
+  document.querySelectorAll("[data-mesh]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mesh === v)));
+  const show = (id, on) => { const el = $(id); if (el) el.hidden = !on; };
+  show("#meshUniform", v === "uniform");
+  // Graded and cylindrical share every per-layer cell count; only the angular knobs differ.
+  show("#meshGraded", v !== "uniform");
+  show("#meshCylOnly", cyl);
+  show("#meshNoteGraded", v === "graded");
+  show("#meshNoteCyl", cyl);
 }
 
 /* The spec the controls are a *view* of.

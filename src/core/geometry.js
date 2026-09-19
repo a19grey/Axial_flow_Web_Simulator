@@ -8,7 +8,7 @@
  */
 
 import { LAYER_Z, RASTER_SUPERSAMPLE } from "./constants.js";
-import { makeMesh, uniformMesh, cellsAcross } from "./mesh.js";
+import { makeMesh, uniformMesh, cellsAcross, CYLINDRICAL } from "./mesh.js";
 import { gradedAxis, symmetricAxis } from "./grading.js";
 
 export const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
@@ -76,7 +76,89 @@ export function motorBox(p) {
 /* ---- mesh construction --------------------------------------------------------------------- */
 
 export function buildMesh(p) {
-  return (p.mesh?.mode === "graded") ? gradedMotorMesh(p) : uniformMotorMesh(p);
+  const mode = p.mesh?.mode;
+  if (mode === "cylindrical") return cylindricalMotorMesh(p);
+  if (mode === "graded") return gradedMotorMesh(p);
+  return uniformMotorMesh(p);
+}
+
+/* The angular period of the machine, in mechanical radians, and how many copies make a full turn.
+ *
+ * The rotor repeats every pole pitch, 2*pi/P. The stator has 1.5*P concentrated coils with phase
+ * k mod 3 and a common winding sense, so coils k and k+3 carry the same current and the winding
+ * repeats every 3 coils, which is 4*pi/P — two pole pitches. The coarser of the two governs, so
+ * the whole machine, currents included, repeats every 4*pi/P: one pole pair, three coils.
+ *
+ * The repeat is plain periodicity rather than anti-periodicity, because same-phase coils here are
+ * wound the same way round rather than alternating.
+ */
+export function angularPeriod(p) {
+  const sectors = Math.max(1, Math.round(p.poles / 2));
+  return { span: 2 * Math.PI / sectors, sectors };
+}
+
+/* A cylindrical (r, theta, z) mesh.
+ *
+ * This is the coordinate system the machine is actually built in. The bore, the outer rim and the
+ * pole arcs all become coordinate surfaces, so the material fractions are exact instead of
+ * staircased; the far field costs almost nothing because the cells grow with radius anyway; and
+ * one pole pair can stand in for the whole machine.
+ */
+function cylindricalMotorMesh(p) {
+  const m = p.mesh, { g, zmin, zmax, L } = motorBox(p);
+  const growth = m.growthRatio;
+  // Radial cell size over the active annulus, matched to the same knob the graded mode uses.
+  const hActive = 2 * g.Rro / m.activeCellsAcrossDiameter;
+  const hFar = hActive * m.farFieldCellFactor;
+
+  /* Radius runs from the axis to the far field. The bore carries return flux but no structure, so
+   * it is allowed to coarsen; the annulus and a margin either side of it are resolved. */
+  const rMax = L;
+  const re = gradedAxis(0, rMax,
+    [{ from: Math.max(0, g.Rri - 2 * hActive), to: Math.min(rMax, g.Rro + 2 * hActive), h: hActive }],
+    [g.Rri, g.Rro, p.ri, p.ro], hFar, growth);
+
+  /* Angle. Uniform cells, because the rotor turns and any grading would have to turn with it,
+   * which would throw away the cached Biot-Savart field on every step of an angle sweep. */
+  const { span, sectors } = angularPeriod(p);
+  const useSector = m.sector !== false && sectors > 1;
+  const thSpan = useSector ? span : 2 * Math.PI;
+  const thCount = useSector ? sectors : 1;
+  // Resolve the pole arc and the coil sides: both are angular features of the pole pitch.
+  const perPole = Math.max(4, Math.round(m.cellsAcrossPoleArc ?? 12));
+  const nth = Math.max(8, Math.round(perPole * p.poles * thSpan / (2 * Math.PI)));
+  const the = new Float64Array(nth + 1);
+  for (let j = 0; j <= nth; j++) the[j] = thSpan * j / nth;
+
+  // z is graded exactly as in the Cartesian case: the interfaces are planes either way.
+  const { ze } = axialGrading(p, g, zmin, zmax, hFar, growth);
+
+  const N = (re.length - 1) * nth * (ze.length - 1);
+  if (N > m.maxCells) throw new Error(
+    `This mesh would need ${(N / 1e6).toFixed(1)} M cells, past the ${(m.maxCells / 1e6).toFixed(0)} M budget in ` +
+    `mesh.maxCells. Lower mesh.activeCellsAcrossDiameter (now ${m.activeCellsAcrossDiameter}) or ` +
+    `mesh.cellsAcrossPoleArc (now ${perPole}), or raise the budget.`);
+
+  return makeMesh(re, the, ze, { kind: CYLINDRICAL, periodicY: true, sectors: useSector ? thCount : 1 });
+}
+
+/* Axial grading, shared by the Cartesian and cylindrical builders: the z interfaces are planes in
+ * both, so the same constraints and hard points apply. */
+function axialGrading(p, g, zmin, zmax, hFar, growth) {
+  const m = p.mesh;
+  const zCons = [
+    { from: g.pcbHalf, to: g.zTB, h: p.gap / m.cellsAcrossAirGap },
+    { from: g.zTB, to: g.zTT, h: p.tooth / m.cellsAcrossPoleHeight },
+    { from: g.zTT, to: g.zYT, h: p.yoke / m.cellsAcrossYoke },
+    { from: -g.pcbHalf, to: g.pcbHalf, h: p.pcbT / m.cellsAcrossPcb }
+  ];
+  const zHard = [-g.pcbHalf, g.pcbHalf, g.zTB, g.zTT, g.zYT];
+  if (p.back) {
+    zCons.push({ from: g.zBB, to: g.zBT, h: p.backT / m.cellsAcrossBackPlate });
+    if (p.backGap > 0) zCons.push({ from: g.zBT, to: -g.pcbHalf, h: p.backGap / m.cellsAcrossBackGap });
+    zHard.push(g.zBT, g.zBB);
+  }
+  return { ze: gradedAxis(zmin, zmax, zCons, zHard, hFar, growth) };
 }
 
 function uniformMotorMesh(p) {
@@ -99,20 +181,7 @@ function gradedMotorMesh(p) {
   // In plane: symmetric about the axis, so a rotor angle of zero is not biased by the grid.
   const inPlane = symmetricAxis(L, [{ from: 0, to: g.Rro, h: hActive }], [g.Rro, g.Rri], hFar, growth);
 
-  const zCons = [
-    { from: g.pcbHalf, to: g.zTB, h: p.gap / m.cellsAcrossAirGap },
-    { from: g.zTB, to: g.zTT, h: p.tooth / m.cellsAcrossPoleHeight },
-    { from: g.zTT, to: g.zYT, h: p.yoke / m.cellsAcrossYoke },
-    { from: -g.pcbHalf, to: g.pcbHalf, h: p.pcbT / m.cellsAcrossPcb }
-  ];
-  const zHard = [-g.pcbHalf, g.pcbHalf, g.zTB, g.zTT, g.zYT];
-  if (p.back) {
-    zCons.push({ from: g.zBB, to: g.zBT, h: p.backT / m.cellsAcrossBackPlate });
-    // The gap below the PCB carries flux the same way the main gap does, so resolve it too.
-    if (p.backGap > 0) zCons.push({ from: g.zBT, to: -g.pcbHalf, h: p.backGap / m.cellsAcrossBackGap });
-    zHard.push(g.zBT, g.zBB);
-  }
-  const ze = gradedAxis(zmin, zmax, zCons, zHard, hFar, growth);
+  const { ze } = axialGrading(p, g, zmin, zmax, hFar, growth);
 
   const N = (inPlane.length - 1) ** 2 * (ze.length - 1);
   if (N > m.maxCells) {
@@ -136,6 +205,81 @@ function gradedMotorMesh(p) {
  * only partial filling left is the in-plane staircase at the pole edges and the bore.
  */
 export function rasterizeMaterials(mesh, p) {
+  return mesh.kind === CYLINDRICAL ? rasterizeCylindrical(mesh, p) : rasterizeCartesian(mesh, p);
+}
+
+/* Total overlap of the angular interval [t0, t1] with the union of the pole arcs. */
+function arcOverlap(t0, t1, th0, poles, halfArc) {
+  const pitch = 2 * Math.PI / poles;
+  const kmin = Math.floor((t0 - th0 - halfArc) / pitch) - 1;
+  const kmax = Math.ceil((t1 - th0 + halfArc) / pitch) + 1;
+  let total = 0;
+  for (let k = kmin; k <= kmax; k++) {
+    const c = th0 + k * pitch;
+    total += Math.max(0, Math.min(t1, c + halfArc) - Math.max(t0, c - halfArc));
+  }
+  return total;
+}
+
+/* Cylindrical rasterization is *exact*.
+ *
+ * Every part of this machine is a product of intervals in (r, theta, z): an annular sector
+ * extruded in z. A cell is the same shape. So the occupied volume fraction is the product of three
+ * one-dimensional overlaps, each computable in closed form — the radial one area-weighted, because
+ * the volume element is r dr dtheta dz.
+ *
+ * That removes the staircase entirely. The Cartesian rasterizer has to supersample 4x4 in plane and
+ * still leaves the bore, the rim and the pole edges as a jagged approximation whose error depends
+ * on where the cell boundaries happen to fall.
+ */
+function rasterizeCylindrical(mesh, p) {
+  const { nx: nr, ny: nt, nz, xe: re, ye: the, ze } = mesh;
+  const g = motorGeom(p);
+  const { zTB, zTT, zYT, zBT, zBB, Rri, Rro } = g;
+  const mu = new Float32Array(mesh.N).fill(1);
+  const th0 = p.theta * Math.PI / 180, halfArc = p.arc * Math.PI / p.poles;
+
+  // Radial area fraction of each cell that lies inside the annulus Rri..Rro. Exact and independent
+  // of theta and z, so it is computed once per radial index.
+  const fRad = new Float64Array(nr);
+  for (let i = 0; i < nr; i++) {
+    const a = Math.max(re[i], Rri), b = Math.min(re[i + 1], Rro);
+    fRad[i] = b > a ? (b * b - a * a) / (re[i + 1] * re[i + 1] - re[i] * re[i]) : 0;
+  }
+  // Angular fraction covered by a pole, likewise independent of r and z.
+  const fArc = new Float64Array(nt);
+  for (let j = 0; j < nt; j++) fArc[j] = arcOverlap(the[j], the[j + 1], th0, p.poles, halfArc) / (the[j + 1] - the[j]);
+
+  for (let iz = 0; iz < nz; iz++) {
+    const za = ze[iz], zb = ze[iz + 1], dz = zb - za;
+    const fPole = overlap(za, zb, zTB, zTT) / dz;
+    const fYoke = overlap(za, zb, zTT, zYT) / dz;
+    const fBack = p.back ? overlap(za, zb, zBB, zBT) / dz : 0;
+    if (!fPole && !fYoke && !fBack) continue;
+    for (let j = 0; j < nt; j++) {
+      const rotorZ = fPole * fArc[j] + fYoke;
+      const base = (iz * nt + j) * nr;
+      for (let i = 0; i < nr; i++) {
+        const fr = fRad[i];
+        if (fr <= 0) continue;
+        const fRot = fr * rotorZ, fBk = fr * fBack;
+        if (fRot + fBk > 0) mu[base + i] = 1 / ((1 - fRot - fBk) + fRot / p.murRot + fBk / p.murBack);
+      }
+    }
+  }
+  return mu;
+}
+
+/* Per-cell relative permeability on a Cartesian mesh.
+ *
+ * Exact overlap in z, supersampling in plane. A partially filled cell gets a series blend,
+ * 1/mu = (1-f) + f/mu_r. Arithmetic averaging of mu would make a partly filled cell behave as solid
+ * iron and silently shrink the air gap.
+ *
+ * With a graded mesh the z interfaces land exactly on faces, so the z fractions are 0 or 1 and the
+ * only partial filling left is the in-plane staircase at the pole edges and the bore.
+ */
+function rasterizeCartesian(mesh, p) {
   const { nx, ny, nz, xc, yc, ze } = mesh;
   const g = motorGeom(p);
   const { zTB, zTT, zYT, zBT, zBB, Rri, Rro } = g;
@@ -180,7 +324,8 @@ export function buildMotor(p) {
   const polys = coilPolys(p);
   const segs = segsFromPolys(polys, zLay);
   // The trace field depends only on the winding and the mesh, never on rotor angle or current.
-  const segKey = JSON.stringify([mesh.nx, mesh.ny, mesh.nz, mesh.x0, mesh.z0, mesh.hMin, mesh.hMax,
+  const segKey = JSON.stringify([mesh.kind, mesh.nx, mesh.ny, mesh.nz, mesh.x0, mesh.x1, mesh.y0, mesh.y1,
+                                 mesh.z0, mesh.hMin, mesh.hMax, mesh.sectors,
                                  p.poles, p.ri, p.ro, p.turns, p.layers, p.pitch, p.edge]);
   return { kind: "motor", p, mesh, mu, polys, segs, segKey, zLay, g };
 }
@@ -188,15 +333,26 @@ export function buildMotor(p) {
 /* Resolution actually achieved, for the quality flags and AFS.plan(). */
 export function meshResolution(mesh, p) {
   const g = motorGeom(p);
-  return {
+  const cyl = mesh.kind === CYLINDRICAL;
+  const res = {
     airGap: cellsAcross(mesh.ze, mesh.nz, g.pcbHalf, g.zTB),
     poleHeight: cellsAcross(mesh.ze, mesh.nz, g.zTB, g.zTT),
     yoke: cellsAcross(mesh.ze, mesh.nz, g.zTT, g.zYT),
     pcb: cellsAcross(mesh.ze, mesh.nz, -g.pcbHalf, g.pcbHalf),
     backPlate: p.back ? cellsAcross(mesh.ze, mesh.nz, g.zBB, g.zBT) : 0,
-    activeDiameter: cellsAcross(mesh.xe, mesh.nx, -g.Rro, g.Rro),
+    // The radial axis runs 0..Rmax in cylindrical and -L..L in Cartesian, so the diameter is
+    // counted twice over in one and directly in the other.
+    activeDiameter: cyl ? 2 * cellsAcross(mesh.xe, mesh.nx, 0, g.Rro)
+                        : cellsAcross(mesh.xe, mesh.nx, -g.Rro, g.Rro),
     radialSpan: cellsAcross(mesh.xe, mesh.nx, p.ri, p.ro)
   };
+  if (cyl) {
+    // Angular cells spanning one pole arc: the feature the theta mesh exists to resolve.
+    const arcSpan = p.arc * 2 * Math.PI / p.poles;
+    res.poleArc = arcSpan / ((mesh.y1 - mesh.y0) / mesh.ny);
+    res.polePitch = (2 * Math.PI / p.poles) / ((mesh.y1 - mesh.y0) / mesh.ny);
+  }
+  return res;
 }
 
 /* ---- validation geometries ---------------------------------------------------------------- */

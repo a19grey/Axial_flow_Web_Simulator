@@ -19,16 +19,22 @@ import { buildMesh } from "./geometry.js";
 
 /* Scale every cell-count knob by `factor`. The effective cell size then falls roughly as 1/factor
  * in all directions at once, which is what makes a single convergence order meaningful. */
+const REFINABLE = {
+  uniform: ["cellsAcrossDiameter"],
+  graded: ["activeCellsAcrossDiameter", "cellsAcrossAirGap", "cellsAcrossPoleHeight",
+           "cellsAcrossYoke", "cellsAcrossPcb", "cellsAcrossBackPlate", "cellsAcrossBackGap"],
+  // Cylindrical adds the angular count, which is the one that most often limits it.
+  cylindrical: ["activeCellsAcrossDiameter", "cellsAcrossPoleArc", "cellsAcrossAirGap",
+                "cellsAcrossPoleHeight", "cellsAcrossYoke", "cellsAcrossPcb",
+                "cellsAcrossBackPlate", "cellsAcrossBackGap"]
+};
+
 export function refineSpec(spec, factor) {
   const s = JSON.parse(JSON.stringify(spec));
   const m = s.mesh;
-  if (m.mode === "graded") {
-    for (const k of ["activeCellsAcrossDiameter", "cellsAcrossAirGap", "cellsAcrossPoleHeight",
-                     "cellsAcrossYoke", "cellsAcrossPcb", "cellsAcrossBackPlate", "cellsAcrossBackGap"])
-      m[k] = Math.max(1, Math.round(m[k] * factor));
-  } else {
-    m.cellsAcrossDiameter = Math.max(16, Math.round(m.cellsAcrossDiameter * factor));
-  }
+  const keys = REFINABLE[m.mode];
+  if (!keys) throw new Error(`Cannot refine a mesh of mode "${m.mode}": no refinement keys are defined for it.`);
+  for (const k of keys) m[k] = Math.max(m.mode === "uniform" ? 16 : 1, Math.round(m[k] * factor));
   return s;
 }
 
@@ -124,6 +130,16 @@ export async function convergenceStudy(specIn, { factors = [1, 1.4, 2, 2.8], sol
   }
 
   const usable = levels.filter(l => !l.error);
+  /* A refinement sequence that never changed the cell count is not a convergence study. This
+   * happened once, silently, when a preset moved to a mesh mode whose knobs were not in the
+   * refinement list: every level solved the identical mesh and the report read "settled to 0.00%".
+   */
+  if (usable.length > 1 && new Set(usable.map(l => l.cells)).size < usable.length) {
+    throw new Error(
+      `Refinement did not change the mesh: levels ${factors.join(", ")} produced ` +
+      `${[...new Set(usable.map(l => l.cells))].join(", ")} cells. The refinement factors are too ` +
+      `close together, or mesh mode "${spec.mesh.mode}" has knobs that refineSpec does not scale.`);
+  }
   const trends = {};
   for (const q of ["torque_mNm", "gapBzMean_mT"]) {
     trends[q] = fitOrder(usable.map(l => ({ cells: l.cells, value: l[q] })));

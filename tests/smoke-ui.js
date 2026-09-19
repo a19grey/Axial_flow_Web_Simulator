@@ -172,7 +172,8 @@ async function main() {
        preserved.tracePitch_mm === 2 && preserved.traceWidth_mm === 1.2 && preserved.edgeMargin_mm === 1
        && preserved.maxIterations === 6000 && preserved.cellsAcrossBackGap === 3,
        `pitch ${preserved.tracePitch_mm} mm, width ${preserved.traceWidth_mm} mm, maxIter ${preserved.maxIterations}`);
-    ok("mapped fields load too", preserved.mode === "graded" && preserved.poles === 8 && preserved.farFieldCellFactor === 10);
+    ok("mapped fields load too", preserved.mode === "cylindrical" && preserved.poles === 8 && preserved.farFieldCellFactor === 10,
+       `mode ${preserved.mode}, ${preserved.poles} poles`);
 
     /* ---- page and headless agree on a preset ----------------------------------------------------- */
     const parity = await page.evaluate(async () => {
@@ -214,6 +215,24 @@ async function main() {
     ok("mesh preview reacts to a control change", graded.afterGap !== graded.gradedPlan && /8\.0 cells across the air gap/.test(graded.afterGap));
     ok("graded mesh solves from the page", /Solved\. Torque/.test(graded.status), graded.status.trim());
     ok("solver panel shows the graded range", /graded/.test(graded.perf), graded.perf.match(/[\d.]+–[\d.]+ mm graded/)?.[0] || "");
+
+    /* ---- cylindrical mode from the interface ------------------------------------------------- */
+    const cyl = await page.evaluate(async () => {
+      document.querySelector("[data-mesh='cylindrical']").click();
+      await new Promise(r => setTimeout(r, 500));
+      const planText = document.getElementById("meshPlan").textContent;
+      const arcVisible = !document.getElementById("meshCylOnly").hidden;
+      document.getElementById("solve").click();
+      await new Promise(r => { const t = setInterval(() => { if (!document.getElementById("solve").disabled) { clearInterval(t); r(); } }, 50); });
+      const c = await import("./src/ui/controls.js");
+      return { planText, arcVisible, mode: c.readSpec().mesh.mode,
+               status: document.getElementById("status").textContent,
+               canvas: document.getElementById("gl").width };
+    });
+    ok("cylindrical mode switches the controls", cyl.arcVisible && cyl.mode === "cylindrical");
+    ok("cylindrical preview reports a sector", /sector/.test(cyl.planText), cyl.planText.replace(/\s+/g, " ").slice(0, 100));
+    ok("cylindrical mesh solves from the page", /Solved\. Torque/.test(cyl.status), cyl.status.trim());
+    ok("the 3D view survives a cylindrical solve", cyl.canvas > 0);
 
     /* ---- view controls ----------------------------------------------------------------------------- */
     const view = await page.evaluate(async () => {

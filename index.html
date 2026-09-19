@@ -149,7 +149,7 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
     </div>
     <h2 style="margin-top:16px">Mesh</h2>
     <div class="seg" role="group" aria-label="Mesh mode" style="margin-bottom:6px">
-      <button data-mesh="uniform" aria-pressed="true">Uniform</button><button data-mesh="graded" aria-pressed="false">Graded</button>
+      <button data-mesh="uniform" aria-pressed="true">Uniform</button><button data-mesh="graded" aria-pressed="false">Graded</button><button data-mesh="cylindrical" aria-pressed="false">Cylindrical</button>
     </div>
     <div id="meshUniform">
       <label for="grid">Cells across the whole box</label>
@@ -173,7 +173,14 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
         <div><label for="mGrowth">Max growth ratio</label><input id="mGrowth" type="number" value="1.2" min="1.02" max="3" step="0.02"></div>
         <div><label for="mFar">Far-field coarsening</label><input id="mFar" type="number" value="8" min="1" max="64" step="1"></div>
       </div>
-      <p class="muted small" style="margin:6px 0 0">Cells are spent where the field varies and stretched into the far field. Material interfaces land exactly on cell faces, so the air gap is never averaged away.</p>
+      <div id="meshCylOnly" hidden>
+        <div class="pair">
+          <div><label for="mArc">Cells per pole pitch</label><input id="mArc" type="number" value="12" min="4" step="2"></div>
+          <div><label for="mSector" style="margin-bottom:6px">One pole pair only</label><input id="mSector" type="checkbox" checked style="width:auto"></div>
+        </div>
+      </div>
+      <p id="meshNoteGraded" class="muted small" style="margin:6px 0 0">Cells are spent where the field varies and stretched into the far field. Material interfaces land exactly on cell faces, so the air gap is never averaged away.</p>
+      <p id="meshNoteCyl" class="muted small" style="margin:6px 0 0" hidden>Meshed in (r, θ, z), the coordinates the machine is built in. The bore, the rim and the pole arcs are cell faces, so material fractions are exact rather than staircased, and one pole pair can stand in for the whole machine.</p>
     </div>
     <div id="meshPlan" class="muted small" style="margin-top:10px;min-height:34px"></div>
     <div class="actions">

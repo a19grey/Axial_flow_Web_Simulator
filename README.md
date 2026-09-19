@@ -154,8 +154,12 @@ material boundaries. The outer box holds φ = 0, with a margin of max(12 mm, 0.4
 
 $$T_{ij} = \frac{1}{\mu_0}\left(B_iB_j - \tfrac12\delta_{ij}B^2\right),\qquad \tau_z = \oint \big(\mathbf r\times(\mathsf T\cdot\hat{\mathbf n})\big)_z\,dA$$
 
-The box's bottom face sits in the air gap. The torque is averaged over **every mesh plane in the
-central 64% of the gap**, and the spread across them is reported as the error bar.
+On a cylindrical mesh this reduces to an annulus in the gap, the cylinder at the outer radius and
+an annulus above the rotor, with only B_θB_z and B_θB_r surviving. On a Cartesian mesh it is a
+six-faced box and the full tensor.
+
+Either way the torque is averaged over **every mesh plane in the central 64% of the gap**, and the
+spread across them is reported as the error bar.
 
 One plane is not enough: refining only z, with the in-plane mesh fixed, moved a single-plane torque
 by 2% as the plane hopped between mesh nodes, without the field meaningfully changing. Planes right
@@ -170,6 +174,12 @@ For an ideal synchronous reluctance machine τ ∝ (L_d − L_q)·I²·sin 2γ, 
 and is zero at 0° and 90°. The γ sweep plots this directly.
 
 ## Meshing
+
+Three modes. `uniform` is the original single-cell-size grid, kept for cross-checking. `graded`
+sizes each Cartesian axis from the geometry. `cylindrical` meshes in (r, θ, z) — the coordinates the
+machine is actually built in — and is the default for both presets.
+
+### Why cylindrical
 
 A uniform grid does not scale. A 370 mm machine with a 3 mm air gap needs ~1 mm cells for three
 across the gap, in a box ~520 mm on a side: about 54 million cells, of which the great majority sit
@@ -188,23 +198,61 @@ Graded mode sizes each axis from the geometry instead:
    as much as the grading: a partially filled cell has its permeability blended, so an air gap
    thinner than one cell simply averages away.
 
-The result for the 370 mm case: **2.7 million cells instead of 432 million** for the same six cells
-across the gap, 289 MB instead of 46 GB, and about 1.2 s of GPU time.
+Cylindrical mode then goes further, because in (r, θ, z) the machine's geometry *is* the coordinate
+system:
+
+- The bore, the outer rim and the pole arcs are coordinate surfaces, so material fractions are
+  computed in closed form instead of supersampled. A cell's filled fraction is the product of three
+  exact one-dimensional overlaps — area-weighted in r, arc-weighted in θ, exact in z. No staircase
+  anywhere.
+- The far field costs almost nothing: cells grow with radius by themselves.
+- θ is periodic, so **one pole pair stands in for the whole machine**. For an 8-pole machine that is
+  a quarter of the cells. The full turn and the sector agree to 6 × 10⁻⁸ relative — it is an exact
+  symmetry, not an approximation.
+- Torque collapses to two terms. On a constant-z annulus the azimuthal traction is B_θB_z/μ₀ and on
+  the outer cylinder it is B_θB_r/μ₀; the B² terms are isotropic and carry no moment about the axis.
+  The Cartesian version needs six faces and the full tensor.
+
+For the 370 mm case at the same six cells across the gap:
+
+| Mesh | Cells | Memory | GPU time | Torque |
+|---|---|---|---|---|
+| Uniform | 54,080,000 | 5.8 GB | — | out of reach |
+| Graded Cartesian | 2,709,504 | 289 MB | 1210 ms | 3.726 N·m |
+| **Cylindrical, ¼ sector** | **622,080** | **66 MB** | **322 ms** | **3.765 N·m** |
+
+Refined until settled, cylindrical extrapolates to 3.771 N·m and graded Cartesian to 3.777 N·m —
+two coordinate systems, different staircasing, different stress surfaces, agreeing to 0.2%.
 
 `AFS.plan(spec)` reports all of this — cell count, size range, aspect ratio, memory, cells across
 the gap — without solving, and the page shows it live as the mesh controls are changed.
 
-Grading buys accuracy, not just cells. On the 80 mm machine, against a 15 M-cell reference:
+Accuracy per cell, on the 80 mm machine against a 15 M-cell Cartesian reference:
 
 | Mesh | Cells | Cells in gap | Torque | Error |
 |---|---|---|---|---|
 | Uniform, 200 across the box | 3,440,000 | 5.3 | 0.10773 mN·m | 7.70% |
 | Graded, 200 across the machine | 2,057,216 | 7.0 | 0.11573 mN·m | 0.84% |
+| Cylindrical, refined | 1,314,048 | 10 | 0.11787 mN·m | 0.98% (the other way) |
+
+The last row is the cross-check rather than a ranking: the two coordinate systems bracket the
+answer from opposite sides, 1% apart, which is the strongest statement either can make about being
+right. Refining either one alone cannot say that.
+
+**Tuning a cylindrical mesh.** The knob that most often limits it is `cellsAcrossPoleArc`. Radial
+and axial resolution look generous while the angular cells stay long and the pole edges smear —
+`plan()` measures the arc length at the rim against the radial cell size and says so when they drift
+apart. The near-axis aspect ratio always reads high; that is inherent to the coordinate system, the
+bore holds few cells and little field, and it is not worth chasing.
 
 ## Numerics
 
-- **Mesh.** An orthogonal tensor-product mesh: three independent lists of node coordinates. A
-  uniform grid is the case where they are evenly spaced, so there is one code path.
+- **Mesh.** An orthogonal tensor-product mesh: three independent lists of node coordinates. Face
+  areas and neighbour distances factorize over the three axes in both coordinate systems, so the
+  assembly, the solver kernels and the reconstruction are written once and a coordinate system is
+  just a table of factors. A uniform grid is the evenly spaced Cartesian case.
+- **Periodicity.** Axis 1 can wrap. The stencil resolves its own neighbour indices, so a sector mesh
+  needs no ghost cells and no special boundary condition.
 - **Materials.** Rotor and back plate are rasterized with 4×4 in-plane supersampling and exact
   z-overlap. A partially filled cell uses series blending, 1/μ = (1 − f) + f/μᵣ. Face permeability is
   the harmonic mean of the two neighbouring cells. Averaging μ arithmetically instead would make a
@@ -253,7 +301,7 @@ antisymmetric between 45° and 135°, and the two stress surfaces agree.
 | `analytic` | the closed-form cases above |
 | `reference` | every design matches the frozen pre-split single-file build to 1e-9 relative |
 | `ui` | the real page: solve, both validation buttons, project round-trip, v1 migration, model export, graded meshing, view controls, and no console errors |
-| `convergence` | the answer stops moving under refinement; grading beats uniform per cell; the 370 mm case runs; a 14 M-cell solve returns a real answer rather than zeros |
+| `convergence` | the answer stops moving under refinement; grading beats uniform per cell; a periodic sector reproduces the full turn exactly; cylindrical and Cartesian agree on a converged answer; the 370 mm case runs; a 14 M-cell solve returns a real answer rather than zeros |
 
 `tests/reference/axial-flux-3d-webgpu.html` is the original single-file build, kept so the
 regression is reproducible indefinitely. `tests/compare-reference.js` drives it through its own
@@ -286,11 +334,9 @@ See `docs/limitations.md` for the full statement. In short:
 - **μᵣ ≲ 200.** Inside high-permeability material H is a small difference of large terms, and f32
   loses it. WebGPU has no f64. Solves past this are flagged in the results rather than failing
   silently.
-- **Cartesian mesh.** Grading removes the staircase in z entirely, because those interfaces are
-  planes that can land on cell faces. Radial and angular boundaries — the bore, the pole arcs —
-  cannot be snapped by a Cartesian mesh and are still staircased. A cylindrical (r, θ, z) backend
-  against the same mesh interface would fix that and allow sector symmetry; it is designed but not
-  built.
+- **Cartesian modes still staircase in plane.** `graded` snaps the z interfaces exactly but cannot
+  land on the bore or the pole arcs. Use `cylindrical` for anything where that matters; the
+  Cartesian modes are kept for cross-checking and for geometry that is not annular.
 - **Simplified windings.** Concentric loops rather than spirals; no vias or end connections.
 - **Magnetostatics only.** No eddy currents, hysteresis, back-EMF or time stepping.
 

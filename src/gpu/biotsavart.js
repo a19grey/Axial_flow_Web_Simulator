@@ -32,7 +32,7 @@ export async function runBiotSavart(G, B, job, { onProgress, signal } = {}) {
   const eps = Math.max(0.25e-3, 0.5 * h);
 
   for (let s = 0; s < ns; s += chunk) {
-    u.set([N, m.nx, m.ny, s, Math.min(ns, s + chunk), B.gridBS.gx, 0, 0]);
+    u.set([N, m.nx, m.ny, s, Math.min(ns, s + chunk), B.gridBS.gx, m.kind === "cylindrical" ? 1 : 0, 0]);
     f.set([0, 0, 0, h, eps * eps, 0, 0, 0], 8);
     d.queue.writeBuffer(B.bsp, 0, ab);
     enc = d.createCommandEncoder();

@@ -111,9 +111,12 @@ async function refreshPlan() {
   const gapClass = r.airGap < 3 ? "fail" : r.airGap < 5 ? "warn" : "pass";
   const saving = info.savingVsUniform > 1.5
     ? ` · <span class="pass">${info.savingVsUniform}× fewer than uniform</span>` : "";
+  const cells = m.cells >= 1e6 ? `${(m.cells / 1e6).toFixed(2)} M cells` : `${m.cells.toLocaleString()} cells`;
+  const sector = m.sectors > 1 ? ` · <span class="pass">1/${m.sectors} sector</span>` : "";
   el.innerHTML =
-    `<strong>${(m.cells / 1e6).toFixed(2)} M cells</strong> ${m.dimensions.join("×")} · ${size} · ${info.memory.totalDeviceMB} MB${saving}` +
+    `<strong>${cells}</strong> ${m.dimensions.join("×")} · ${size} · ${info.memory.totalDeviceMB} MB${saving}${sector}` +
     `<br><span class="${gapClass}">${r.airGap.toFixed(1)} cells across the air gap</span>` +
+    (r.poleArc ? ` · ${r.poleArc.toFixed(1)} across the pole arc` : "") +
     (m.uniform ? "" : ` · aspect ${m.worstAspectRatio.toFixed(0)}:1`) +
     (info.notes.length ? `<br><span class="fail">${info.notes[0]}</span>` : "");
 }

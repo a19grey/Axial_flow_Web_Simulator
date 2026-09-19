@@ -14,12 +14,68 @@
  */
 
 import { MU0 } from "./constants.js";
-import { locate, cellsAcross } from "./mesh.js";
+import { locate, cellsAcross, planeAreaM, CYLINDRICAL } from "./mesh.js";
 
 const MM = 1e-3;
 
-/* Torque on a box whose bottom face is the z-plane at mesh node kb. */
 export function torque(sol, kb) {
+  return sol.job.mesh.kind === CYLINDRICAL ? torqueCylindrical(sol, kb) : torqueCartesian(sol, kb);
+}
+
+/* Torque on a closed surface in cylindrical coordinates: an annular disc in the air gap, the
+ * cylinder at the outer radius, and an annular disc above the rotor.
+ *
+ * In this basis the Maxwell stress collapses. For a surface with normal z-hat the azimuthal
+ * traction is T_theta_z = B_theta B_z / mu0, and the moment arm is r, so
+ *
+ *     tau_z = (1/mu0) * integral r B_theta B_z dA
+ *
+ * and for the cylinder at radius R, T_theta_r = B_theta B_r / mu0 gives
+ *
+ *     tau_z = (1/mu0) * integral r B_theta B_r dA .
+ *
+ * No B^2 terms survive at all — they are isotropic and carry no moment about the axis. Compare the
+ * Cartesian version below, which needs six faces and the full tensor.
+ *
+ * A sector mesh integrates its own share, so the result is scaled by the number of sectors.
+ */
+function torqueCylindrical(sol, kb) {
+  const { job, Bx: Br, By: Bt, Bz } = sol, m = job.mesh;
+  const { nx: nr, ny: nt, nz, sz, xc: rc, xe: re, ze, dy: dth, dz, rArea } = m;
+
+  // Outer cylinder: far enough out to enclose the rotor, inside the mesh.
+  const iOut = Math.min(nr - 1, locate(re, nr, job.g.Rro + 2) + 1);
+  const kt = Math.min(nz - 2, locate(ze, nz, job.g.zYT) + 3);
+  if (!(kt > kb && iOut > 1)) return NaN;
+
+  const idx = (i, j, k) => (k * nt + j) * nr + i;
+  const avg = (a, b) => 0.5 * (a + b);
+  let T = 0;
+
+  // Bottom disc (normal -z) and top disc (normal +z), r = 0 .. r_out.
+  for (let j = 0; j < nt; j++) for (let i = 0; i < iOut; i++) {
+    // Area element r dr dtheta = rArea[i] * dtheta; the moment arm r and the area both live in
+    // the same integral, so the combined weight is (integral of r^2 dr) * dtheta.
+    const w = (re[i + 1] ** 3 - re[i] ** 3) / 3 * dth[j] * MM * MM * MM;
+    const a = idx(i, j, kb - 1), b = idx(i, j, kb);
+    T -= avg(Bt[a], Bt[b]) * avg(Bz[a], Bz[b]) * w;
+    const c = idx(i, j, kt - 1), d = idx(i, j, kt);
+    T += avg(Bt[c], Bt[d]) * avg(Bz[c], Bz[d]) * w;
+  }
+
+  // Outer cylinder (normal +r) at r = re[iOut].
+  const R = re[iOut] * MM;
+  for (let k = kb; k < kt; k++) for (let j = 0; j < nt; j++) {
+    const dA = R * dth[j] * (dz[k] * MM);
+    const a = idx(iOut - 1, j, k), b = idx(iOut, j, k);
+    T += R * avg(Bt[a], Bt[b]) * avg(Br[a], Br[b]) * dA;
+  }
+
+  return m.sectors * T / MU0;
+}
+
+/* Torque on a box whose bottom face is the z-plane at mesh node kb. */
+function torqueCartesian(sol, kb) {
   const { job, Bx, By, Bz } = sol, m = job.mesh;
   const { nx, ny, nz, sy, sz, xe, ye, ze, xc, yc, dx, dy, dz } = m;
 
@@ -143,12 +199,14 @@ export function motorMetrics(sol) {
   const kg = Math.min(m.nz - 2, Math.max(0, locate(m.zc, m.nz, zmid)));
   const z0 = m.zc[kg], z1 = m.zc[kg + 1];
   const w = z1 > z0 ? Math.min(1, Math.max(0, (zmid - z0) / (z1 - z0))) : 0;
+  const cyl = m.kind === CYLINDRICAL;
   let s = 0, wsum = 0;
   for (let iy = 0; iy < m.ny; iy++) for (let ix = 0; ix < m.nx; ix++) {
-    const r = Math.hypot(m.xc[ix], m.yc[iy]);
+    const r = cyl ? m.xc[ix] : Math.hypot(m.xc[ix], m.yc[iy]);
     if (r > job.p.ri && r < job.p.ro) {
-      // Area-weighted, because on a graded mesh the cells are not all the same size.
-      const a = m.dx[ix] * m.dy[iy];
+      // Area-weighted: cells differ in size on a graded mesh, and in cylindrical coordinates a
+      // cell's footprint grows with radius.
+      const a = planeAreaM(m, ix, iy);
       const k0 = (kg * m.ny + iy) * m.nx + ix, k1 = k0 + m.sz;
       s += Math.abs(sol.Bz[k0] * (1 - w) + sol.Bz[k1] * w) * a;
       wsum += a;
