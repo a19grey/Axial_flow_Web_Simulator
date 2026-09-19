@@ -15,9 +15,9 @@
  *   node tests/convergence.js [--quick] [--out report.json]
  */
 
-import { writeFile } from "node:fs/promises";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { writeFile, readFile, mkdir } from "node:fs/promises";
+
+import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve, CHROME_ARGS } from "../cli/run.js";
 
@@ -151,7 +151,11 @@ async function main() {
   }
 
   report.pass = problems.length === 0;
-  if (outFile) { await writeFile(outFile, JSON.stringify(report, null, 2) + "\n"); process.stderr.write(`\nwrote ${outFile}\n`); }
+  if (outFile) {
+    await mkdir(dirname(outFile), { recursive: true });
+    await writeFile(outFile, JSON.stringify(report, null, 2) + "\n");
+    process.stderr.write(`\nwrote ${outFile}\n`);
+  }
   process.stderr.write(`\n${problems.length ? `${problems.length} problem(s):\n  - ${problems.join("\n  - ")}` : "all convergence checks passed"}\n`);
   process.exit(problems.length ? 1 : 0);
 }
