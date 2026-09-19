@@ -8,19 +8,32 @@ import { SH } from "./shaders.js";
 
 let gpu = null;
 const lostHandlers = new Set();
-const pendingErrors = [];
 
-/* Throw if the device reported an error since the last check, so a silent no-op dispatch becomes a
- * visible failure instead of a plausible-looking zero. */
-export function checkDeviceErrors(context) {
-  if (!pendingErrors.length) return;
-  const all = pendingErrors.splice(0, pendingErrors.length);
-  throw new Error(`The GPU rejected work during ${context}: ${all[0]}` +
-                  (all.length > 1 ? ` (and ${all.length - 1} more)` : "") +
-                  ". The result would have been wrong, so it was discarded.");
+/* Scoped error capture.
+ *
+ * WebGPU reports validation and out-of-memory failures asynchronously. Without checking, a rejected
+ * dispatch simply does nothing and the solve returns a field of zeros — which is how a mesh past
+ * the workgroup-per-dimension cap once produced a confident torque of 0.000, faster than a correct
+ * run.
+ *
+ * Error *scopes* rather than the global uncapturederror event, because a scope attributes the
+ * failure to the work that caused it. A global latch would let an unrelated error — the renderer
+ * failing to allocate a texture, say — surface as "the GPU rejected work during the potential
+ * solve", which sends the reader somewhere else entirely.
+ */
+export function beginErrorScope(device) {
+  device.pushErrorScope("out-of-memory");
+  device.pushErrorScope("validation");
 }
 
-export function clearDeviceErrors() { pendingErrors.length = 0; }
+export async function endErrorScope(device, context) {
+  const validation = await device.popErrorScope();
+  const oom = await device.popErrorScope();
+  const err = validation || oom;
+  if (!err) return;
+  throw new Error(`The GPU rejected work during ${context}: ${err.message}. ` +
+                  `The result would have been wrong, so it was discarded.`);
+}
 
 /* Notified when the adapter drops the device (usually an out-of-memory grid). */
 export function onDeviceLost(fn) { lostHandlers.add(fn); return () => lostHandlers.delete(fn); }
@@ -41,14 +54,9 @@ export async function initGPU() {
     for (const fn of lostHandlers) { try { fn(info); } catch (e) { console.error(e); } }
   });
 
-  /* WebGPU reports validation and out-of-memory failures asynchronously. Without this listener a
-   * rejected dispatch simply does nothing and the solve returns a field of zeros — which is how a
-   * mesh past the workgroup-per-dimension cap used to produce a confident torque of 0.000. Errors
-   * are latched and raised by the next checkDeviceErrors(). */
+  // Anything not inside a scope — renderer work, mostly — still gets reported rather than lost.
   device.addEventListener("uncapturederror", ev => {
-    const msg = ev.error?.message || String(ev.error);
-    pendingErrors.push(msg);
-    console.error("WebGPU error:", msg);
+    console.error("WebGPU error (unscoped):", ev.error?.message || String(ev.error));
   });
   const mk = (code, constants) => device.createComputePipeline({
     layout: "auto",

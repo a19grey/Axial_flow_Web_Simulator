@@ -7,19 +7,25 @@ as project files.
 Everything runs in the browser from static files. There is no server, no build step and no bundler.
 The same modules also run headless, so a script or an agent can drive the solver and read JSON back.
 
-    axialflow/
-      index.html      the tool
-      headless.html   the same solver with no interface, exposing window.AFS
-      cli/run.js      a Playwright driver for the headless page
+## Quick start
+
+Everything runs from the repository root, `axialflow/`.
+
+```sh
+cd axialflow
+npm run setup          # once: npm install + Playwright's chromium
+npm start              # http://localhost:8080
+npm test               # all four suites
+```
+
+```
+axialflow/
+  index.html      the tool
+  headless.html   the same solver with no interface, exposing window.AFS
+  cli/run.js      a Playwright driver for the headless page
+```
 
 ## Running it locally
-
-Everything below runs from the repository root, `axialflow/`.
-
-**First time:**
-
-    cd axialflow
-    npm run setup          # npm install + playwright's chromium, ~100 MB, once
 
 **Open the tool:**
 
@@ -28,15 +34,19 @@ Everything below runs from the repository root, `axialflow/`.
     npm start -- --port 9000
 
 `localhost` is a secure context, which is all WebGPU needs. Nothing is compiled or bundled: edit a
-file under `src/`, reload the page, and the change is live. Use a recent Chrome or Edge, or
-Safari 26+.
+file under `src/`, reload the page, and the change is live (the dev server sends `no-store`). Use a
+recent Chrome or Edge, or Safari 26+.
 
 **Run the tests:**
 
     npm test               # all four suites, ~45 s
-    npm run test:quick     # analytic + UI only, ~10 s — the one to use while editing
+    npm run test:quick     # analytic + UI only, ~15 s — the one to use while editing
     npm run test:ui
     npm run test:convergence
+
+Two suites need a real GPU and are local-only; `analytic` and `ui` also run in CI on SwiftShader's
+software adapter, where the UI suite shrinks every mesh and visibly skips the assertions that depend
+on resolution. See `docs/numerics.md` for what runs where and why.
 
 **Drive it headlessly:**
 
@@ -299,9 +309,9 @@ antisymmetric between 45° and 135°, and the two stress surfaces agree.
 | Suite | What it proves |
 |---|---|
 | `analytic` | the closed-form cases above |
-| `reference` | every design matches the frozen pre-split single-file build to 1e-9 relative |
+| `reference` | *(needs a GPU)* every design matches the frozen pre-split single-file build to 1e-9 relative |
 | `ui` | the real page: solve, both validation buttons, project round-trip, v1 migration, model export, graded meshing, view controls, and no console errors |
-| `convergence` | the answer stops moving under refinement; grading beats uniform per cell; a periodic sector reproduces the full turn exactly; cylindrical and Cartesian agree on a converged answer; the 370 mm case runs; a 14 M-cell solve returns a real answer rather than zeros |
+| `convergence` | *(needs a GPU)* the answer stops moving under refinement; grading beats uniform per cell; a periodic sector reproduces the full turn exactly; cylindrical and Cartesian agree on a converged answer; the 370 mm case runs; a 14 M-cell solve returns a real answer rather than zeros |
 
 `tests/reference/axial-flux-3d-webgpu.html` is the original single-file build, kept so the
 regression is reproducible indefinitely. `tests/compare-reference.js` drives it through its own
@@ -325,6 +335,12 @@ poles fused to the yoke), `back_plate.stl`, `stator_traces.svg`, and `project.js
 
 **Browser library.** Projects saved in the browser are stored per site origin and show each design's
 torque and gap field side by side.
+
+## Documentation
+
+- `docs/numerics.md` — every measured number: scale, convergence, accuracy per cell, why torque uses
+  many surfaces, dispatch limits, and which suite runs where.
+- `docs/limitations.md` — what the solver cannot do, why, and what would lift each restriction.
 
 ## Limitations
 

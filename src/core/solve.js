@@ -3,7 +3,7 @@
 
 import { MU0 } from "./constants.js";
 import { coefs } from "./assemble.js";
-import { initGPU, checkDeviceErrors, clearDeviceErrors } from "../gpu/device.js";
+import { initGPU, beginErrorScope, endErrorScope } from "../gpu/device.js";
 import { ensureBuffers } from "../gpu/buffers.js";
 import { runBiotSavart } from "../gpu/biotsavart.js";
 import { runPCG, readBack, dispatch } from "../gpu/pcg.js";
@@ -18,14 +18,14 @@ export function phaseCurrents(p) {
 export async function solveJob(job, opts = {}) {
   const { onProgress, signal, currents, uniformH, skipPCG, solver = {} } = opts;
   const G = await initGPU();
-  clearDeviceErrors();
   const B = ensureBuffers(G, job), d = G.device, t = {};
 
   let t0 = performance.now();
   if (job.segs) {
     if (B.segKey !== job.segKey) {
+      beginErrorScope(d);
       await runBiotSavart(G, B, job, { onProgress, signal });
-      checkDeviceErrors("the Biot-Savart pass");
+      await endErrorScope(d, "the Biot-Savart pass");
       t.bs = performance.now() - t0; t.bsCached = false;
     } else { t.bs = 0; t.bsCached = true; }
   }
@@ -47,8 +47,9 @@ export async function solveJob(job, opts = {}) {
   t.setup = performance.now() - t0;
 
   let pcg = null;
+  beginErrorScope(d);
   if (!skipPCG) pcg = await runPCG(G, B, { ...solver, onProgress, signal });
-  checkDeviceErrors("the potential solve");
+  await endErrorScope(d, "the potential solve");
 
   t0 = performance.now();
   const { Hs, phi } = await readBack(G, B, !skipPCG);
