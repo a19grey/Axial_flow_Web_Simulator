@@ -17,12 +17,12 @@ export const pctErr = (a, b) => (a - b) / b * 100;
  * Reference: B_z(z) = mu0 I R^2 / 2 (R^2 + z^2)^{3/2}.
  * Tests the source field alone; the potential solve is skipped because mu = 1 everywhere. */
 export function analyzeLoop(sol, { window_mm = 30 } = {}) {
-  const { job } = sol;
+  const { job } = sol, m = job.mesh;
   const R = job.R * 1e-3;
   let worstPct = 0, worstZ = 0;
   const samples = [];
-  for (let iz = 1; iz < job.nz - 1; iz++) {
-    const z = job.z0 + (iz + .5) * job.hm;
+  for (let iz = 1; iz < m.nz - 1; iz++) {
+    const z = m.zc[iz];
     if (Math.abs(z) > window_mm) continue;
     const analytic = MU0 * R * R / (2 * (R * R + (z * 1e-3) ** 2) ** 1.5);
     const computed = interpCentre(sol.Bz, job, iz);
@@ -34,7 +34,7 @@ export function analyzeLoop(sol, { window_mm = 30 } = {}) {
   return {
     case: "loop", tolerance_pct,
     worstError_pct: +worstPct.toFixed(4), worstAt_z_mm: +worstZ.toFixed(3),
-    loopRadius_mm: job.R, cellsAcrossDiameter: job.nx, cellSize_mm: +job.hm.toFixed(4),
+    loopRadius_mm: job.R, cellsAcrossDiameter: m.nx, cellSize_mm: +m.hMin.toFixed(4),
     pass: Math.abs(worstPct) <= tolerance_pct,
     samples
   };
@@ -54,11 +54,11 @@ export function analyzeSphere(sol) {
   for (let q = 0; q < job.mu.length; q++) if (job.mu[q] > mr * 0.999) { s += sol.Bz[q]; cnt++; }
   const meanInside = s / cnt;
 
-  const c = job.nx / 2;
+  const c = job.mesh.nx / 2;
   let centre = 0;
   for (const dz of [-1, 0]) centre += interpCentre(sol.Bz, job, c + dz) / 2;
 
-  const cellsAcross = 2 * job.a / job.hm;
+  const cellsAcross = 2 * job.a / job.mesh.hMin;
   // Tolerance scales with mu_r because the staircase error does: ~3% at mu_r 5, ~8% at mu_r 20 on
   // 20 cells across, and it converges away under refinement (case 10 measures the order).
   const tolerance_pct = Math.min(35, 2 + 0.35 * mr);

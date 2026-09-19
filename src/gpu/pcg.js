@@ -4,13 +4,17 @@
  * are submitted in batches so the CPU reads back the residual only once per check interval.
  */
 
-/* Queue a list of [pipelineName, workgroupCount] into one command encoder. */
+/* Queue a list of pipeline names into one command encoder.
+ *
+ * "cells" dispatches one thread per cell across the 2D workgroup grid; "one" is a single
+ * workgroup, used by the scalar reductions. */
 export function dispatch(G, B, list) {
   const enc = G.device.createCommandEncoder(), pass = enc.beginComputePass();
-  for (const [name, n] of list) {
+  for (const [name, kind] of list) {
     pass.setPipeline(G.pl[name]);
     pass.setBindGroup(0, B.bg[name]);
-    pass.dispatchWorkgroups(n);
+    if (kind === "one") pass.dispatchWorkgroups(1);
+    else pass.dispatchWorkgroups(B.grid.gx, B.grid.gy);
   }
   pass.end();
   return enc;
@@ -18,13 +22,13 @@ export function dispatch(G, B, list) {
 
 export async function runPCG(G, B, { tolerance = 1e-5, maxIterations = 4000, checkInterval = 32, stallPatience = 6,
                                      onProgress, signal } = {}) {
-  const d = G.device, g = B.parts;
-  d.queue.submit([dispatch(G, B, [["rhs", g], ["init", g], ["red0", 1]]).finish()]);
+  const d = G.device;
+  d.queue.submit([dispatch(G, B, [["rhs", "cells"], ["init", "cells"], ["red0", "one"]]).finish()]);
   await d.queue.onSubmittedWorkDone();
 
   const t0 = performance.now(), batch = checkInterval, hist = [[0, 1]];
   let it = 0, rel = 1, best = Infinity, stall = 0, reason = "maxIterations";
-  const one = [["matvec", g], ["red1", 1], ["update", g], ["red2", 1], ["pupdate", g]];
+  const one = [["matvec", "cells"], ["red1", "one"], ["update", "cells"], ["red2", "one"], ["pupdate", "cells"]];
   const seq = [];
   for (let k = 0; k < batch; k++) seq.push(...one);
 

@@ -27,28 +27,70 @@ export const CONTROLS = {
   backGap: ["design.backPlate.gapBelowPcb_mm", "number"],
   theta:   ["operatingPoint.rotorAngle_deg", "number"],
   gamma:   ["operatingPoint.currentAngle_elecDeg", "number"],
-  grid:    ["mesh.cellsAcrossDiameter", "select"]
+  grid:    ["mesh.cellsAcrossDiameter", "select"],
+  mActive: ["mesh.activeCellsAcrossDiameter", "number"],
+  mGap:    ["mesh.cellsAcrossAirGap", "number"],
+  mPole:   ["mesh.cellsAcrossPoleHeight", "number"],
+  mYoke:   ["mesh.cellsAcrossYoke", "number"],
+  mPcb:    ["mesh.cellsAcrossPcb", "number"],
+  mBack:   ["mesh.cellsAcrossBackPlate", "number"],
+  mGrowth: ["mesh.growthRatio", "number"],
+  mFar:    ["mesh.farFieldCellFactor", "number"]
 };
+
+/* Mesh mode is a segmented control rather than an input, so it is held here. */
+export const meshMode = { value: "uniform" };
+
+export function setMeshMode(mode) {
+  meshMode.value = mode === "graded" ? "graded" : "uniform";
+  document.querySelectorAll("[data-mesh]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mesh === meshMode.value)));
+  const u = $("#meshUniform"), g = $("#meshGraded");
+  if (u) u.hidden = meshMode.value !== "uniform";
+  if (g) g.hidden = meshMode.value !== "graded";
+}
+
+/* The spec the controls are a *view* of.
+ *
+ * Only some spec fields have a control: trace pitch and width, the solver tolerances, the cell
+ * budget and several mesh knobs do not. Rebuilding the spec from defaults on every read would
+ * silently discard them, so a loaded project would be solved with default windings. The controls
+ * are therefore overlaid onto this retained spec rather than onto a fresh default one.
+ */
+let held = defaultSpec();
+
+/* Replace the retained spec wholesale, for callers that have one from outside the form. */
+export function holdSpec(spec) { held = JSON.parse(JSON.stringify(spec)); }
+export function heldSpec() { return JSON.parse(JSON.stringify(held)); }
 
 /* Build a normalized spec from the controls. Throws with a readable message on an invalid design,
  * which is what the Solve button surfaces on the status line. */
 export function readSpec({ name, notes } = {}) {
-  const raw = defaultSpec();
+  const raw = JSON.parse(JSON.stringify(held));
   for (const [id, [path, kind]] of Object.entries(CONTROLS)) {
     const el = $("#" + id);
     if (!el) continue;
     setPath(raw, path, kind === "check" ? el.checked : +el.value);
   }
+  raw.mesh.mode = meshMode.value;
   raw.name = (name ?? $("#projName")?.value ?? "").trim() || "Untitled motor";
   raw.notes = (notes ?? $("#projNotes")?.value ?? "").trim();
   const { spec } = normalizeSpec(raw);
+  held = JSON.parse(JSON.stringify(spec));
   return spec;
 }
+
+/* Anything that changes the controls announces it, so views derived from the spec — the mesh cost
+ * preview in particular — cannot go stale. Typing into an input fires the DOM's own input event;
+ * loading a project fires this. */
+export const SPEC_CHANGED = "afs-spec-changed";
+export const announceSpecChange = () => document.dispatchEvent(new CustomEvent(SPEC_CHANGED));
 
 /* Push a spec into the controls. Returns the paths that could not be applied, so the caller can
  * tell the user which settings kept their previous value. */
 export function writeSpec(spec) {
   const skipped = [];
+  holdSpec(spec);
+  setMeshMode(spec.mesh?.mode);
   for (const [id, [path, kind]] of Object.entries(CONTROLS)) {
     const el = $("#" + id);
     if (!el) continue;
@@ -64,5 +106,6 @@ export function writeSpec(spec) {
   }
   if ($("#projName")) $("#projName").value = spec.name || "";
   if ($("#projNotes")) $("#projNotes").value = spec.notes || "";
+  announceSpecChange();
   return skipped;
 }

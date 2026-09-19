@@ -27,7 +27,8 @@ const AFS = {
 
   solve: (spec, opts) => call(() => api.solve(spec, withProgress(opts))),
   sweep: (spec, sweepSpec, opts) => call(() => api.sweep(spec, sweepSpec, withProgress(opts))),
-  validate: (which, spec, opts) => call(() => api.validate(which, spec, withProgress(opts)))
+  validate: (which, spec, opts) => call(() => api.validate(which, spec, withProgress(opts))),
+  convergence: (spec, opts) => call(() => api.convergence(spec, withProgress(opts)))
 };
 
 function withProgress(opts = {}) {

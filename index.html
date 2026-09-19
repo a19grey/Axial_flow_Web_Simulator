@@ -147,8 +147,35 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
       <div><label for="theta">Rotor angle (° mech)</label><input id="theta" type="number" value="0" step="5"></div>
       <div><label for="gamma">Current angle γ (° elec)</label><input id="gamma" type="number" value="45" step="5"></div>
     </div>
-    <label for="grid">Grid across diameter</label>
-    <select id="grid"><option value="96">96 cells (fast)</option><option value="128" selected>128 cells</option><option value="160">160 cells</option></select>
+    <h2 style="margin-top:16px">Mesh</h2>
+    <div class="seg" role="group" aria-label="Mesh mode" style="margin-bottom:6px">
+      <button data-mesh="uniform" aria-pressed="true">Uniform</button><button data-mesh="graded" aria-pressed="false">Graded</button>
+    </div>
+    <div id="meshUniform">
+      <label for="grid">Cells across the whole box</label>
+      <select id="grid"><option value="96">96 (fast)</option><option value="128" selected>128</option><option value="160">160</option><option value="200">200</option><option value="256">256</option><option value="320">320</option></select>
+      <p class="muted small" style="margin:6px 0 0">One cell size everywhere, including the far field. Fine for a small machine; a large one with a thin gap needs far too many cells this way.</p>
+    </div>
+    <div id="meshGraded" hidden>
+      <div class="pair">
+        <div><label for="mActive">Cells across machine</label><input id="mActive" type="number" value="160" min="16" step="10"></div>
+        <div><label for="mGap">Cells across air gap</label><input id="mGap" type="number" value="6" min="1" step="1"></div>
+      </div>
+      <div class="pair">
+        <div><label for="mPole">Cells across pole</label><input id="mPole" type="number" value="4" min="1" step="1"></div>
+        <div><label for="mYoke">Cells across yoke</label><input id="mYoke" type="number" value="3" min="1" step="1"></div>
+      </div>
+      <div class="pair">
+        <div><label for="mPcb">Cells across PCB</label><input id="mPcb" type="number" value="4" min="1" step="1"></div>
+        <div><label for="mBack">Cells across back plate</label><input id="mBack" type="number" value="3" min="1" step="1"></div>
+      </div>
+      <div class="pair">
+        <div><label for="mGrowth">Max growth ratio</label><input id="mGrowth" type="number" value="1.2" min="1.02" max="3" step="0.02"></div>
+        <div><label for="mFar">Far-field coarsening</label><input id="mFar" type="number" value="8" min="1" max="64" step="1"></div>
+      </div>
+      <p class="muted small" style="margin:6px 0 0">Cells are spent where the field varies and stretched into the far field. Material interfaces land exactly on cell faces, so the air gap is never averaged away.</p>
+    </div>
+    <div id="meshPlan" class="muted small" style="margin-top:10px;min-height:34px"></div>
     <div class="actions">
       <button id="solve" class="primary">Solve</button>
       <button id="sweep">Sweep current angle γ</button>

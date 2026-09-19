@@ -20,7 +20,8 @@ const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const SUITES = [
   { name: "analytic", cmd: ["cli/run.js", "validate", "--quiet"], note: "closed-form reference cases" },
   { name: "reference", cmd: ["tests/compare-reference.js"], note: "vs the frozen pre-split build" },
-  { name: "ui", cmd: ["tests/smoke-ui.js"], note: "the full page end to end" }
+  { name: "ui", cmd: ["tests/smoke-ui.js"], note: "the full page end to end" },
+  { name: "convergence", cmd: ["tests/convergence.js", "--out", "tests/out/convergence.json"], note: "mesh refinement and the 370 mm scale case" }
 ];
 
 function run(script, extra) {

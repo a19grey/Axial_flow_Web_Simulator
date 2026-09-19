@@ -8,13 +8,15 @@
  */
 
 import { normalizeSpec, defaultSpec, specToParams, specHash, SPEC_VERSION, getPath, setPath } from "./spec.js";
-import { buildMotor, motorGrid } from "./geometry.js";
+import { buildMotor, buildMesh, motorGeom, meshResolution } from "./geometry.js";
 import { solveJob, phaseCurrents } from "./solve.js";
 import { motorMetrics } from "./torque.js";
 import { resultsSummary } from "./results.js";
 import { runLoopCase, runSphereCase } from "./validate.js";
+import { convergenceStudy } from "./convergence.js";
 import { capabilities as gpuCapabilities, initGPU, isSoftwareAdapter } from "../gpu/device.js";
 import { bufferBytes } from "../gpu/buffers.js";
+import { meshStats } from "./mesh.js";
 
 export const API_VERSION = "0.2.0";
 
@@ -24,36 +26,48 @@ export const API_VERSION = "0.2.0";
 export async function plan(specIn) {
   const { spec, warnings } = normalizeSpec(specIn);
   const p = specToParams(spec);
-  const grid = motorGrid(p);
-  const mem = bufferBytes(grid.nx, grid.ny, grid.nz);
-  const cellsInGap = p.gap / grid.hm;
+  const notes = [...warnings];
+
+  let mesh;
+  try { mesh = buildMesh(p); }
+  catch (e) { return { specHash: specHash(spec), error: e.message, notes: [...notes, e.message], fits: false }; }
+
+  const res = meshResolution(mesh, p);
+  const mem = bufferBytes(mesh.N);
 
   let caps = null;
-  try { caps = await gpuCapabilities(); } catch { /* reported as a warning below */ }
-
-  const notes = [...warnings];
+  try { caps = await gpuCapabilities(); } catch { /* reported as a note below */ }
   if (!caps) notes.push("No WebGPU adapter is available, so device limits could not be checked.");
   else if (mem.largestBinding > caps.limits.maxStorageBufferBindingSize)
-    notes.push(`This grid needs ${(mem.largestBinding / 1048576).toFixed(0)} MB in one binding; this device allows ${(caps.limits.maxStorageBufferBindingSize / 1048576).toFixed(0)} MB.`);
-  if (cellsInGap < 3) notes.push(`Only ${cellsInGap.toFixed(1)} cells span the ${p.gap} mm air gap. At least 3 are needed for a meaningful torque.`);
+    notes.push(`This mesh needs ${(mem.largestBinding / 1048576).toFixed(0)} MB in one binding; this device allows ${(caps.limits.maxStorageBufferBindingSize / 1048576).toFixed(0)} MB.`);
+
+  if (res.airGap < 3) notes.push(
+    `Only ${res.airGap.toFixed(1)} cells span the ${p.gap} mm air gap; at least 3 are needed for a meaningful torque. ` +
+    (spec.mesh.mode === "uniform"
+      ? `A uniform grid has to use that cell size everywhere. Set mesh.mode to "graded" to spend cells where the field varies.`
+      : `Raise mesh.cellsAcrossAirGap (now ${spec.mesh.cellsAcrossAirGap}).`));
+  // Fitting the largest single binding is necessary but not sufficient: the whole set has to fit in
+  // device memory, and a few GB will either fail to allocate or thrash.
+  if (mem.total > 2 * 1024 ** 3) notes.push(
+    `This mesh wants ${(mem.total / 1024 ** 3).toFixed(1)} GB of device memory across all buffers. Most GPUs will refuse or thrash; aim for well under 2 GB.`);
+  if (mesh.aspect > 40) notes.push(
+    `The worst cell aspect ratio is ${mesh.aspect.toFixed(0)}:1. Strongly stretched cells slow the conjugate-gradient solve; lowering mesh.farFieldCellFactor or mesh.growthRatio will trade cells for iterations.`);
+
+  // What a uniform grid would have cost for the same gap resolution, which is the case for grading.
+  const hGap = p.gap / Math.max(1, spec.mesh.mode === "graded" ? spec.mesh.cellsAcrossAirGap : res.airGap);
+  const uniformEquivalent = Math.round((mesh.x1 - mesh.x0) / hGap) * Math.round((mesh.y1 - mesh.y0) / hGap) * Math.round((mesh.z1 - mesh.z0) / hGap);
 
   return {
     specHash: specHash(spec),
-    mesh: {
-      mode: spec.mesh.mode,
-      dimensions: [grid.nx, grid.ny, grid.nz],
-      cells: mem.cells,
-      cellSize_mm: +grid.hm.toFixed(4),
-      boxHalfWidth_mm: +grid.L.toFixed(2),
-      boxZ_mm: [+grid.zmin.toFixed(2), +grid.zmax.toFixed(2)],
-      margin_mm: +grid.margin.toFixed(2),
-      cellsAcrossAirGap: +cellsInGap.toFixed(2)
-    },
+    mesh: { ...meshStats(mesh), margin_mm: Math.max(p.marginMin, p.marginFactor * p.ro) },
+    resolution_cells: res,
     memory: {
       totalDeviceBytes: mem.total,
       totalDeviceMB: +(mem.total / 1048576).toFixed(1),
       largestBindingMB: +(mem.largestBinding / 1048576).toFixed(1)
     },
+    uniformEquivalentCells: uniformEquivalent,
+    savingVsUniform: +(uniformEquivalent / mesh.N).toFixed(1),
     fits: caps ? mem.largestBinding <= caps.limits.maxStorageBufferBindingSize : null,
     adapter: caps ? caps.adapter : null,
     notes
@@ -80,6 +94,7 @@ export async function solveMotor(specIn, opts = {}) {
   const sol = await solveJob(job, { ...opts, currents: I, solver: spec.solver });
   sol.I = I;
   sol.m = motorMetrics(sol);
+  sol.resolution = meshResolution(job.mesh, p);
   sol.spec = spec;
   sol.warnings = warnings;
   return sol;
@@ -141,6 +156,18 @@ function rangeValues({ from, to, step, count }) {
   const n = Math.floor((to - from) / step + 1e-9);
   for (let i = 0; i <= n; i++) out.push(+(from + i * step).toPrecision(12));
   return out;
+}
+
+/* ---- convergence ------------------------------------------------------------------------------ */
+
+/* Solve the same design at a sequence of mesh refinements and fit the observed order of
+ * convergence. This is the only real evidence that a result is mesh-converged; two stress surfaces
+ * agreeing is necessary but not sufficient, because both can be wrong together. */
+export async function convergence(specIn, opts = {}) {
+  return convergenceStudy(specIn, {
+    ...opts,
+    solveFn: async variant => resultsSummary(await solveMotor(variant, opts))
+  });
 }
 
 /* ---- validation ------------------------------------------------------------------------------ */

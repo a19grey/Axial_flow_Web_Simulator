@@ -110,6 +110,7 @@ function writeProgress(ev) {
   if (ev.phase === "biotSavart") s = `biot-savart  ${ev.done}/${ev.total} segments`;
   else if (ev.phase === "pcg") s = `potential    it ${ev.iteration}  residual ${ev.residual.toExponential(2)}`;
   else if (ev.phase === "sweep") s = `sweep        ${ev.index + 1}/${ev.total}  ${ev.path} = ${ev.value}`;
+  else if (ev.phase === "convergence") s = `refinement   ${ev.index + 1}/${ev.total}  x${ev.factor}  ${ev.cells.toLocaleString()} cells`;
   else if (ev.phase === "rasterize") s = "rasterizing materials";
   else s = ev.phase;
   process.stderr.write(`\r\x1b[2K  ${s}`);
@@ -189,6 +190,16 @@ const COMMANDS = {
     }, [spec, overrides, sw]));
   },
 
+  async convergence(page, args) {
+    const { spec, overrides } = await loadSpec(args);
+    const factors = args.factors ? String(args.factors).split(",").map(Number) : [1, 1.4, 2, 2.8];
+    return unwrap(await page.evaluate(([s, ov, f]) => {
+      const base = s || window.AFS.defaultSpec();
+      for (const [p, v] of ov) window.AFS.setPathOn(base, p, v);
+      return window.AFS.convergence(base, { factors: f });
+    }, [spec, overrides, factors]));
+  },
+
   async validate(page, args) {
     const { spec, overrides } = await loadSpec(args);
     const which = args.case ? String(args.case).split(",") : "all";
@@ -207,6 +218,7 @@ const USAGE = `axial-flux headless driver
   node cli/run.js solve    [spec.json] [-o out.json] [--set path=value ...]
   node cli/run.js sweep    [spec.json] --path <spec.path> [--from 0 --to 180 --step 15 | --count N | --values a,b,c]
   node cli/run.js validate [--case loop,sphere] [--spec spec.json]
+  node cli/run.js convergence [spec.json] [--factors 1,1.4,2,2.8]
 
   --set design.rotor.airGap_mm=2.5     override any spec field, repeatable
   -o out.json                          write the result JSON to a file as well as stdout

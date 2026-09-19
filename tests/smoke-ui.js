@@ -149,6 +149,72 @@ async function main() {
     });
     ok("model export produces a zip", zip.magic === "PK" && zip.size > 20000, `${zip.filename}, ${(zip.size / 1024).toFixed(0)} kB`);
 
+    /* ---- spec fields with no control must survive a round trip ---------------------------------
+     * Only some spec fields have an input. Rebuilding the spec from defaults on every read used to
+     * discard the rest, so a loaded project solved with default windings while showing the loaded
+     * numbers — a wrong answer with no visible symptom. */
+    const preserved = await page.evaluate(async () => {
+      const spec = await (await fetch("./src/cases/scale-370mm.json")).json();
+      const pj = await import("./src/ui/project.js");
+      await pj.applyProject(spec, { solve: false });
+      const rs = (await import("./src/ui/controls.js")).readSpec();
+      return {
+        tracePitch_mm: rs.design.stator.tracePitch_mm,
+        traceWidth_mm: rs.design.stator.traceWidth_mm,
+        edgeMargin_mm: rs.design.stator.edgeMargin_mm,
+        maxIterations: rs.solver.maxIterations,
+        cellsAcrossBackGap: rs.mesh.cellsAcrossBackGap,
+        farFieldCellFactor: rs.mesh.farFieldCellFactor,
+        mode: rs.mesh.mode, poles: rs.design.stator.poles
+      };
+    });
+    ok("unmapped spec fields survive a project load",
+       preserved.tracePitch_mm === 2 && preserved.traceWidth_mm === 1.2 && preserved.edgeMargin_mm === 1
+       && preserved.maxIterations === 6000 && preserved.cellsAcrossBackGap === 3,
+       `pitch ${preserved.tracePitch_mm} mm, width ${preserved.traceWidth_mm} mm, maxIter ${preserved.maxIterations}`);
+    ok("mapped fields load too", preserved.mode === "graded" && preserved.poles === 8 && preserved.farFieldCellFactor === 10);
+
+    /* ---- page and headless agree on a preset ----------------------------------------------------- */
+    const parity = await page.evaluate(async () => {
+      const spec = await (await fetch("./src/cases/scale-370mm.json")).json();
+      const pj = await import("./src/ui/project.js");
+      await pj.applyProject(spec);
+      await new Promise(r => { const t = setInterval(() => { if (!document.getElementById("solve").disabled) { clearInterval(t); r(); } }, 50); });
+      const shown = +document.getElementById("res").textContent.match(/([\d.]+) mN·m/)[1];
+      const api = await window.AFS.solve(spec);
+      return { shown, api: api.ok ? api.value.results.torque_mNm : null };
+    });
+    ok("page and API agree on the 370 mm preset",
+       parity.api !== null && Math.abs(parity.shown - parity.api) / Math.abs(parity.api) < 1e-6,
+       `${parity.shown} vs ${parity.api?.toFixed(3)} mN·m`);
+
+    /* ---- graded mesh through the interface ---------------------------------------------------- */
+    const graded = await page.evaluate(async () => {
+      const readPlan = () => document.getElementById("meshPlan").textContent;
+      const uniformPlan = readPlan();
+      document.querySelector("[data-mesh='graded']").click();
+      await new Promise(r => setTimeout(r, 500));
+      const gradedPlan = readPlan();
+      const gradedVisible = !document.getElementById("meshGraded").hidden && document.getElementById("meshUniform").hidden;
+      document.getElementById("mGap").value = "8";
+      document.getElementById("mGap").dispatchEvent(new Event("input", { bubbles: true }));
+      await new Promise(r => setTimeout(r, 500));
+      const afterGap = readPlan();
+      document.getElementById("solve").click();
+      await new Promise(r => { const t = setInterval(() => { if (!document.getElementById("solve").disabled) { clearInterval(t); r(); } }, 50); });
+      const spec = window.AFS.normalizeSpec(JSON.parse(JSON.stringify(
+        (await import("./src/ui/controls.js")).readSpec())));
+      return { uniformPlan, gradedPlan, afterGap, gradedVisible, mode: spec.mesh.mode,
+               status: document.getElementById("status").textContent,
+               result: document.getElementById("res").textContent,
+               perf: document.getElementById("perf").textContent };
+    });
+    ok("graded mode switches the controls", graded.gradedVisible && graded.mode === "graded");
+    ok("mesh preview reports a cost before solving", /M cells/.test(graded.gradedPlan), graded.gradedPlan.split("\n")[0].slice(0, 90));
+    ok("mesh preview reacts to a control change", graded.afterGap !== graded.gradedPlan && /8\.0 cells across the air gap/.test(graded.afterGap));
+    ok("graded mesh solves from the page", /Solved\. Torque/.test(graded.status), graded.status.trim());
+    ok("solver panel shows the graded range", /graded/.test(graded.perf), graded.perf.match(/[\d.]+–[\d.]+ mm graded/)?.[0] || "");
+
     /* ---- view controls ----------------------------------------------------------------------------- */
     const view = await page.evaluate(async () => {
       document.querySelector("[data-slice='gap']").click();

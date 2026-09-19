@@ -46,10 +46,25 @@ export function defaultSpec() {
     },
     operatingPoint: { rotorAngle_deg: 0, currentAngle_elecDeg: 45 },
     mesh: {
+      /* "uniform" reproduces the original single-cell-size grid exactly.
+       * "graded" sizes each axis from the geometry: fine through the air gap and the thin parts,
+       * stretched into the far field, with every material interface landing on a mesh face. */
       mode: "uniform",
-      cellsAcrossDiameter: 128,
-      marginFactor: 0.4,      // outer-box margin as a fraction of outer radius
-      marginMin_mm: 12
+      cellsAcrossDiameter: 128,        // uniform mode: cells across the whole box
+      marginFactor: 0.4,               // outer-box margin as a fraction of outer radius
+      marginMin_mm: 12,
+
+      /* graded mode */
+      activeCellsAcrossDiameter: 160,  // in-plane cells across the machine itself, not the box
+      cellsAcrossAirGap: 6,
+      cellsAcrossPoleHeight: 4,
+      cellsAcrossYoke: 3,
+      cellsAcrossPcb: 4,
+      cellsAcrossBackPlate: 3,
+      cellsAcrossBackGap: 2,
+      growthRatio: 1.2,                // largest ratio between neighbouring cell sizes
+      farFieldCellFactor: 8,           // far-field cell size, as a multiple of the in-plane size
+      maxCells: 40e6                   // refuse to build a mesh larger than this
     },
     solver: { ...SOLVER_DEFAULTS }
   };
@@ -97,11 +112,17 @@ export function normalizeSpec(input) {
   s.operatingPoint.rotorAngle_deg = num(op.rotorAngle_deg, 0);
   s.operatingPoint.currentAngle_elecDeg = num(op.currentAngle_elecDeg, 45);
 
-  const me = src.mesh ?? {};
-  s.mesh.mode = me.mode === "graded" ? "graded" : "uniform";
-  s.mesh.cellsAcrossDiameter = Math.max(16, Math.round(num(me.cellsAcrossDiameter, s.mesh.cellsAcrossDiameter)));
-  s.mesh.marginFactor = clampMin(me.marginFactor, 0, s.mesh.marginFactor);
-  s.mesh.marginMin_mm = clampMin(me.marginMin_mm, 0, s.mesh.marginMin_mm);
+  const me = src.mesh ?? {}, dm = s.mesh;
+  dm.mode = me.mode === "graded" ? "graded" : "uniform";
+  dm.cellsAcrossDiameter = Math.max(16, Math.round(num(me.cellsAcrossDiameter, dm.cellsAcrossDiameter)));
+  dm.marginFactor = clampMin(me.marginFactor, 0, dm.marginFactor);
+  dm.marginMin_mm = clampMin(me.marginMin_mm, 0, dm.marginMin_mm);
+  dm.activeCellsAcrossDiameter = Math.max(16, Math.round(num(me.activeCellsAcrossDiameter, dm.activeCellsAcrossDiameter)));
+  for (const k of ["cellsAcrossAirGap", "cellsAcrossPoleHeight", "cellsAcrossYoke", "cellsAcrossPcb", "cellsAcrossBackPlate", "cellsAcrossBackGap"])
+    dm[k] = Math.max(1, Math.round(num(me[k], dm[k])));
+  dm.growthRatio = Math.min(3, Math.max(1.02, num(me.growthRatio, dm.growthRatio)));
+  dm.farFieldCellFactor = Math.min(64, Math.max(1, num(me.farFieldCellFactor, dm.farFieldCellFactor)));
+  dm.maxCells = Math.max(1e4, num(me.maxCells, dm.maxCells));
 
   const so = src.solver ?? {};
   s.solver.tolerance = clampMin(so.tolerance, 1e-12, s.solver.tolerance);
@@ -174,7 +195,8 @@ export function specToParams(spec) {
     back: bp.enabled, murBack: bp.mu_r, backT: bp.thickness_mm, backGap: bp.gapBelowPcb_mm,
     theta: spec.operatingPoint.rotorAngle_deg, gamma: spec.operatingPoint.currentAngle_elecDeg,
     grid: spec.mesh.cellsAcrossDiameter,
-    marginFactor: spec.mesh.marginFactor, marginMin: spec.mesh.marginMin_mm
+    marginFactor: spec.mesh.marginFactor, marginMin: spec.mesh.marginMin_mm,
+    mesh: spec.mesh
   };
 }
 

@@ -1,19 +1,23 @@
-/* Storage buffers and bind groups for one grid size. Reallocated only when the grid changes, so a
- * sweep over rotor angle or current angle reuses everything. */
+/* Storage buffers and bind groups for one mesh. Reallocated only when the mesh dimensions change,
+ * so a sweep over rotor angle or current angle reuses everything. */
 
 export function ensureBuffers(G, job) {
-  const key = `${job.nx}x${job.ny}x${job.nz}`;
-  if (G.buf && G.buf.key === key) return G.buf;
+  const m = job.mesh;
+  const key = `${m.nx}x${m.ny}x${m.nz}`;
+  if (G.buf && G.buf.key === key) { writeMeshCoords(G, G.buf, m); return G.buf; }
   if (G.buf) for (const b of Object.values(G.buf)) if (b && b.destroy) b.destroy();
 
-  const d = G.device, N = job.nx * job.ny * job.nz, parts = Math.ceil(N / 256);
+  const d = G.device, N = m.N;
+  // WebGPU caps workgroups per dimension, so a large mesh is dispatched as a 2D grid and the
+  // kernels linearise the index themselves. See dispatchGrid().
+  const grid = dispatchGrid(G, N, 256);
+  const parts = grid.gx * grid.gy;
   const need = 9 * N * 4;
   if (need > G.limits.maxStorageBufferBindingSize) {
     throw new Error(
-      `This grid needs ${(need / 1048576).toFixed(0)} MB in one buffer but this device allows ` +
-      `${(G.limits.maxStorageBufferBindingSize / 1048576).toFixed(0)} MB. ` +
-      `That caps the uniform grid at about ${Math.floor(Math.cbrt(G.limits.maxStorageBufferBindingSize / 36))} cells per side. ` +
-      `Choose a smaller grid.`);
+      `This mesh needs ${(need / 1048576).toFixed(0)} MB in one buffer but this device allows ` +
+      `${(G.limits.maxStorageBufferBindingSize / 1048576).toFixed(0)} MB, which caps it at about ` +
+      `${Math.floor(G.limits.maxStorageBufferBindingSize / 36 / 1e6)} M cells. Use a coarser mesh.`);
   }
 
   const ST = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
@@ -22,19 +26,24 @@ export function ensureBuffers(G, job) {
 
   const B = {
     key, N, parts,
-    params: mk(32, U), cur: mk(16, U), bsp: mk(64, U),
+    grid, gridBS: dispatchGrid(G, N, 64),
+    params: mk(48, U), cur: mk(16, U), bsp: mk(64, U),
     cX: mk(N * 4), cY: mk(N * 4), cZ: mk(N * 4), diag: mk(N * 4), b: mk(N * 4),
+    sX: mk(N * 4), sY: mk(N * 4), sZ: mk(N * 4),
     x: mk(N * 4), r: mk(N * 4), p: mk(N * 4), Ap: mk(N * 4),
     partA: mk(parts * 4), partB: mk(parts * 4), scal: mk(32),
     H: mk(9 * N * 4), Hs: mk(3 * N * 4),
+    // Cell-centre coordinate tables, metres, read by the Biot-Savart shader.
+    xc: mk(m.nx * 4), yc: mk(m.ny * 4), zc: mk(m.nz * 4),
     readScal: mk(32, R), readX: mk(N * 4, R), readHs: mk(3 * N * 4, R),
     segBuf: null, segKey: null
   };
 
-  const ab = new ArrayBuffer(32), u = new Uint32Array(ab), f = new Float32Array(ab);
-  u.set([job.nx, job.ny, job.nz, N, parts, job.nx, job.nx * job.ny]);
-  f[7] = job.hm * 1e-3;
+  const ab = new ArrayBuffer(48), u = new Uint32Array(ab), f = new Float32Array(ab);
+  u.set([m.nx, m.ny, m.nz, N, parts, m.sy, m.sz, grid.gx]);
+  f[8] = m.hMin * 1e-3;   // retained for shaders that want a representative length
   d.queue.writeBuffer(B.params, 0, ab);
+  writeMeshCoords(G, B, m);
 
   const bg = (pl, list) => d.createBindGroup({
     layout: pl.getBindGroupLayout(0),
@@ -50,17 +59,34 @@ export function ensureBuffers(G, job) {
     red1: bg(P.red1, [B.params, B.partA, B.partB, B.scal]),
     red2: bg(P.red2, [B.params, B.partA, B.partB, B.scal]),
     combine: bg(P.combine, [B.params, B.cur, B.H, B.Hs]),
-    rhs: bg(P.rhs, [B.params, B.cX, B.cY, B.cZ, B.diag, B.Hs, B.b])
+    rhs: bg(P.rhs, [B.params, B.sX, B.sY, B.sZ, B.diag, B.Hs, B.b])
   };
   G.buf = B;
   return B;
 }
 
-/* Total device memory this grid will occupy, for AFS.plan() to report before committing. */
-export function bufferBytes(nx, ny, nz) {
-  const N = nx * ny * nz;
-  const storage = (4 + 1 + 4) * N * 4;      // cX cY cZ diag b + x r p Ap
-  const source = (9 + 3) * N * 4;           // H + Hs
-  const readback = (1 + 3) * N * 4;         // readX + readHs
-  return { total: storage + source + readback, largestBinding: 9 * N * 4, cells: N };
+/* The coordinate tables change whenever the mesh is regraded, even at the same cell counts. */
+function writeMeshCoords(G, B, m) {
+  const f32 = a => { const o = new Float32Array(a.length); for (let i = 0; i < a.length; i++) o[i] = a[i] * 1e-3; return o; };
+  G.device.queue.writeBuffer(B.xc, 0, f32(m.xc));
+  G.device.queue.writeBuffer(B.yc, 0, f32(m.yc));
+  G.device.queue.writeBuffer(B.zc, 0, f32(m.zc));
+}
+
+/* Split a flat thread count across a 2D workgroup grid within the device's per-dimension cap. */
+export function dispatchGrid(G, count, workgroupSize) {
+  const total = Math.ceil(count / workgroupSize);
+  const cap = G.limits.maxComputeWorkgroupsPerDimension;
+  const gx = Math.min(cap, total);
+  const gy = Math.ceil(total / gx);
+  if (gy > cap) throw new Error(`This mesh needs ${total.toLocaleString()} workgroups, more than this device can dispatch even as a 2D grid.`);
+  return { gx, gy, total };
+}
+
+/* Device memory this mesh will occupy, for AFS.plan() to report before committing. */
+export function bufferBytes(N) {
+  const storage = 12 * N * 4;   // cX cY cZ sX sY sZ diag b x r p Ap
+  const source = 12 * N * 4;    // H (9) + Hs (3)
+  const readback = 4 * N * 4;   // readX (1) + readHs (3)
+  return { total: (storage + source + readback), largestBinding: 9 * N * 4, cells: N };
 }

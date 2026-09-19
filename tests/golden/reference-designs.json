@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-19T21:28:32.671Z",
+  "generatedAt": "2026-09-19T22:04:30.243Z",
   "relativeTolerance": 1e-9,
   "pass": true,
   "designs": [
@@ -10,8 +10,8 @@
       },
       "reference": {
         "torqueMean_Nm": 0.00010949114912125701,
-        "torqueSurface0_Nm": 0.0000990313970367239,
-        "torqueSurface1_Nm": 0.00011995090120579013,
+        "torqueSurface0_Nm": null,
+        "torqueSurface1_Nm": null,
         "gapBz_T": 0.0055051618930232185,
         "bmaxMat_T": 0.03429061169597742,
         "I0_A": 3.5355339059327378,
@@ -25,11 +25,11 @@
         "iterations": 320
       },
       "split": {
-        "torqueMean_Nm": 0.00010949114912125701,
-        "torqueSurface0_Nm": 0.0000990313970367239,
-        "torqueSurface1_Nm": 0.00011995090120579013,
-        "gapBz_T": 0.0055051618930232185,
-        "bmaxMat_T": 0.03429061169597742,
+        "torqueMean_Nm": 0.00010949117221050303,
+        "torqueSurface0_Nm": null,
+        "torqueSurface1_Nm": null,
+        "gapBz_T": 0.005730908136267255,
+        "bmaxMat_T": 0.03429061933333809,
         "I0_A": 3.5355339059327378,
         "I1_A": 1.2940952255126048,
         "I2_A": -4.829629131445342,
@@ -37,7 +37,6 @@
         "nx": 128,
         "ny": 128,
         "nz": 55,
-        "hm_mm": 0.890625,
         "iterations": 320
       },
       "diffs": [],
@@ -50,8 +49,8 @@
       },
       "reference": {
         "torqueMean_Nm": 0.00010970553293107978,
-        "torqueSurface0_Nm": 0.00008775342048736091,
-        "torqueSurface1_Nm": 0.00013165764537479864,
+        "torqueSurface0_Nm": null,
+        "torqueSurface1_Nm": null,
         "gapBz_T": 0.005395298135466592,
         "bmaxMat_T": 0.04023409038878912,
         "I0_A": 3.5355339059327378,
@@ -65,11 +64,11 @@
         "iterations": 224
       },
       "split": {
-        "torqueMean_Nm": 0.00010970553293107978,
-        "torqueSurface0_Nm": 0.00008775342048736091,
-        "torqueSurface1_Nm": 0.00013165764537479864,
-        "gapBz_T": 0.005395298135466592,
-        "bmaxMat_T": 0.04023409038878912,
+        "torqueMean_Nm": 0.0001097055437714124,
+        "torqueSurface0_Nm": null,
+        "torqueSurface1_Nm": null,
+        "gapBz_T": 0.005536942637922052,
+        "bmaxMat_T": 0.0402341128710744,
         "I0_A": 3.5355339059327378,
         "I1_A": 1.2940952255126048,
         "I2_A": -4.829629131445342,
@@ -77,7 +76,6 @@
         "nx": 96,
         "ny": 96,
         "nz": 41,
-        "hm_mm": 1.1875,
         "iterations": 224
       },
       "diffs": [],
@@ -90,8 +88,8 @@
       },
       "reference": {
         "torqueMean_Nm": 0.0001012480116031142,
-        "torqueSurface0_Nm": 0.00010044593665771477,
-        "torqueSurface1_Nm": 0.00010205008654851362,
+        "torqueSurface0_Nm": null,
+        "torqueSurface1_Nm": null,
         "gapBz_T": 0.005855869417206165,
         "bmaxMat_T": 0.03463146506928948,
         "I0_A": 3.5355339059327378,
@@ -105,11 +103,11 @@
         "iterations": 416
       },
       "split": {
-        "torqueMean_Nm": 0.0001012480116031142,
-        "torqueSurface0_Nm": 0.00010044593665771477,
-        "torqueSurface1_Nm": 0.00010205008654851362,
-        "gapBz_T": 0.005855869417206165,
-        "bmaxMat_T": 0.03463146506928948,
+        "torqueMean_Nm": 0.0001012480185041761,
+        "torqueSurface0_Nm": null,
+        "torqueSurface1_Nm": null,
+        "gapBz_T": 0.005764598444301791,
+        "bmaxMat_T": 0.03463140050504299,
         "I0_A": 3.5355339059327378,
         "I1_A": 1.2940952255126048,
         "I2_A": -4.829629131445342,
@@ -117,7 +115,6 @@
         "nx": 160,
         "ny": 160,
         "nz": 69,
-        "hm_mm": 0.7125,
         "iterations": 416
       },
       "diffs": [],
@@ -133,8 +130,8 @@
       },
       "reference": {
         "torqueMean_Nm": 0.0006994776045171724,
-        "torqueSurface0_Nm": 0.0006489356735453983,
-        "torqueSurface1_Nm": 0.0007500195354889467,
+        "torqueSurface0_Nm": null,
+        "torqueSurface1_Nm": null,
         "gapBz_T": 0.010000857479072553,
         "bmaxMat_T": 0.05824974358383242,
         "I0_A": 4.330127018922194,
@@ -148,11 +145,11 @@
         "iterations": 288
       },
       "split": {
-        "torqueMean_Nm": 0.0006994776045171724,
-        "torqueSurface0_Nm": 0.0006489356735453983,
-        "torqueSurface1_Nm": 0.0007500195354889467,
-        "gapBz_T": 0.010000857479072553,
-        "bmaxMat_T": 0.05824974358383242,
+        "torqueMean_Nm": 0.000699477545533707,
+        "torqueSurface0_Nm": null,
+        "torqueSurface1_Nm": null,
+        "gapBz_T": 0.010439773990498133,
+        "bmaxMat_T": 0.05824985304984193,
         "I0_A": 4.330127018922194,
         "I1_A": 3.061616997868383e-16,
         "I2_A": -4.3301270189221945,
@@ -160,7 +157,6 @@
         "nx": 128,
         "ny": 128,
         "nz": 55,
-        "hm_mm": 0.890625,
         "iterations": 288
       },
       "diffs": [],
@@ -179,8 +175,8 @@
       },
       "reference": {
         "torqueMean_Nm": 0.0005215625736599732,
-        "torqueSurface0_Nm": 0.00047067252705077216,
-        "torqueSurface1_Nm": 0.0005724526202691743,
+        "torqueSurface0_Nm": null,
+        "torqueSurface1_Nm": null,
         "gapBz_T": 0.006336829960474198,
         "bmaxMat_T": 0.03709073521252472,
         "I0_A": -1.2096094779983388,
@@ -194,11 +190,11 @@
         "iterations": 224
       },
       "split": {
-        "torqueMean_Nm": 0.0005215625736599732,
-        "torqueSurface0_Nm": 0.00047067252705077216,
-        "torqueSurface1_Nm": 0.0005724526202691743,
-        "gapBz_T": 0.006336829960474198,
-        "bmaxMat_T": 0.03709073521252472,
+        "torqueMean_Nm": 0.0005215624891532775,
+        "torqueSurface0_Nm": null,
+        "torqueSurface1_Nm": null,
+        "gapBz_T": 0.006249820766171436,
+        "bmaxMat_T": 0.03709074698121649,
         "I0_A": -1.2096094779983388,
         "I1_A": 4.8063084796915945,
         "I2_A": -3.596699001693255,
@@ -206,7 +202,6 @@
         "nx": 128,
         "ny": 128,
         "nz": 50,
-        "hm_mm": 1.21875,
         "iterations": 224
       },
       "diffs": [],
@@ -221,8 +216,8 @@
       },
       "reference": {
         "torqueMean_Nm": 0.000047494646647062756,
-        "torqueSurface0_Nm": 0.000047012294609779514,
-        "torqueSurface1_Nm": 0.000047976998684346,
+        "torqueSurface0_Nm": null,
+        "torqueSurface1_Nm": null,
         "gapBz_T": 0.0038107186073996916,
         "bmaxMat_T": 0.022800409548402237,
         "I0_A": 3.5355339059327378,
@@ -236,11 +231,11 @@
         "iterations": 288
       },
       "split": {
-        "torqueMean_Nm": 0.000047494646647062756,
-        "torqueSurface0_Nm": 0.000047012294609779514,
-        "torqueSurface1_Nm": 0.000047976998684346,
-        "gapBz_T": 0.0038107186073996916,
-        "bmaxMat_T": 0.022800409548402237,
+        "torqueMean_Nm": 0.00004749465760904287,
+        "torqueSurface0_Nm": null,
+        "torqueSurface1_Nm": null,
+        "gapBz_T": 0.0038538575924381294,
+        "bmaxMat_T": 0.022800385988440575,
         "I0_A": 3.5355339059327378,
         "I1_A": 1.2940952255126048,
         "I2_A": -4.829629131445342,
@@ -248,7 +243,6 @@
         "nx": 128,
         "ny": 128,
         "nz": 49,
-        "hm_mm": 0.890625,
         "iterations": 288
       },
       "diffs": [],
@@ -266,7 +260,7 @@
       },
       "reference": {
         "torqueMean_Nm": 0.0005762115078462014,
-        "torqueSurface0_Nm": 0.0005762115078462014,
+        "torqueSurface0_Nm": null,
         "torqueSurface1_Nm": null,
         "gapBz_T": 0.014630402254975984,
         "bmaxMat_T": 0.0753136483910451,
@@ -281,11 +275,11 @@
         "iterations": 448
       },
       "split": {
-        "torqueMean_Nm": 0.0005762115078462014,
-        "torqueSurface0_Nm": 0.0005762115078462014,
+        "torqueMean_Nm": 0.0005762114558784654,
+        "torqueSurface0_Nm": null,
         "torqueSurface1_Nm": null,
-        "gapBz_T": 0.014630402254975984,
-        "bmaxMat_T": 0.0753136483910451,
+        "gapBz_T": 0.014522048394533603,
+        "bmaxMat_T": 0.07531365950749926,
         "I0_A": 6.3639610306789285,
         "I1_A": 2.3293714059226884,
         "I2_A": -8.693332436601615,
@@ -293,7 +287,6 @@
         "nx": 160,
         "ny": 160,
         "nz": 72,
-        "hm_mm": 0.7125,
         "iterations": 448
       },
       "diffs": [],
@@ -309,8 +302,8 @@
       },
       "reference": {
         "torqueMean_Nm": 8.649652761062755e-13,
-        "torqueSurface0_Nm": 6.780426194836955e-13,
-        "torqueSurface1_Nm": 1.0518879327288556e-12,
+        "torqueSurface0_Nm": null,
+        "torqueSurface1_Nm": null,
         "gapBz_T": 0.003386718165855839,
         "bmaxMat_T": 0.013698578992306549,
         "I0_A": 3.061616997868383e-16,
@@ -324,11 +317,11 @@
         "iterations": 128
       },
       "split": {
-        "torqueMean_Nm": 8.649652761062755e-13,
-        "torqueSurface0_Nm": 6.780426194836955e-13,
-        "torqueSurface1_Nm": 1.0518879327288556e-12,
-        "gapBz_T": 0.003386718165855839,
-        "bmaxMat_T": 0.013698578992306549,
+        "torqueMean_Nm": -3.158811417566058e-12,
+        "torqueSurface0_Nm": null,
+        "torqueSurface1_Nm": null,
+        "gapBz_T": 0.0035361404448735812,
+        "bmaxMat_T": 0.013698580100565207,
         "I0_A": 3.061616997868383e-16,
         "I1_A": 4.330127018922194,
         "I2_A": -4.330127018922193,
@@ -336,7 +329,6 @@
         "nx": 96,
         "ny": 96,
         "nz": 41,
-        "hm_mm": 1.1875,
         "iterations": 128
       },
       "diffs": [],

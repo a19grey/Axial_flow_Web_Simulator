@@ -1,0 +1,19 @@
+{
+  "format": "axial-flux-project",
+  "version": 2,
+  "name": "370 mm scale test, 3 mm gap",
+  "notes": "The geometry that motivated graded meshing: a 370 mm outer diameter with a 3 mm air gap, the proportions of a YASA-class axial-flux machine. Three cells across that gap means ~1 mm cells across a ~520 mm box, which is about 116 million uniform cells; a uniform grid cannot do this at any practical size. Note this is a scale test of the mesh and solver, not a model of a YASA motor: the topology here is still the PCB coreless stator with a low-permeability salient-pole rotor, because permanent magnets and high-mu steel are outside what the reduced scalar potential can currently represent (see docs/limitations.md).",
+  "design": {
+    "stator": { "poles": 8, "copperLayers": 4, "innerRadius_mm": 110, "outerRadius_mm": 185,
+                "turnsPerLayer": 16, "peakCurrent_A": 40, "thickness_mm": 1.6,
+                "tracePitch_mm": 2.0, "traceWidth_mm": 1.2, "edgeMargin_mm": 1.0 },
+    "rotor": { "airGap_mm": 3, "mu_r": 60, "poleHeight_mm": 12, "yokeThickness_mm": 16, "poleArcFraction": 0.6 },
+    "backPlate": { "enabled": true, "mu_r": 60, "thickness_mm": 16, "gapBelowPcb_mm": 3 }
+  },
+  "operatingPoint": { "rotorAngle_deg": 0, "currentAngle_elecDeg": 45 },
+  "mesh": { "mode": "graded", "activeCellsAcrossDiameter": 200, "cellsAcrossAirGap": 6,
+            "cellsAcrossPoleHeight": 5, "cellsAcrossYoke": 4, "cellsAcrossPcb": 3,
+            "cellsAcrossBackPlate": 4, "cellsAcrossBackGap": 3,
+            "growthRatio": 1.22, "farFieldCellFactor": 10, "maxCells": 40000000 },
+  "solver": { "tolerance": 1e-5, "maxIterations": 6000, "checkInterval": 32, "stallPatience": 6 }
+}

@@ -6,12 +6,12 @@
  */
 
 import { $, ui, setStatus, setBusy, requestStop, guarded } from "./dom.js";
-import { readSpec } from "./controls.js";
+import { readSpec, setMeshMode, CONTROLS, SPEC_CHANGED } from "./controls.js";
 import { perfPanel, resultPanel, qualityPanel } from "./panels.js";
 import { drawSweep, drawP2 } from "./plots.js";
 import { hookProjectUI, setSolveHook } from "./project.js";
 import { initRenderer, updateScene, updateLegend, hookViewControls } from "../render/renderer.js";
-import { solveMotor } from "../core/api.js";
+import { solveMotor, plan } from "../core/api.js";
 import { runLoopCase, runSphereCase } from "../core/validate.js";
 import { resultsSummary } from "../core/results.js";
 import { initGPU, onDeviceLost } from "../gpu/device.js";
@@ -87,6 +87,41 @@ $("#vSphere").onclick = () => guarded(async signal => {
 
 $("#stop").onclick = requestStop;
 
+/* ---- live mesh preview -------------------------------------------------------------------------
+ * plan() is cheap (it builds the mesh but rasterizes nothing and touches no GPU buffers), so the
+ * cost of a mesh can be shown while it is being tuned rather than discovered by pressing Solve. */
+
+let planTimer = null;
+function schedulePlan() {
+  clearTimeout(planTimer);
+  planTimer = setTimeout(refreshPlan, 150);
+}
+
+async function refreshPlan() {
+  const el = $("#meshPlan");
+  if (!el) return;
+  let info;
+  try { info = await plan(readSpec()); }
+  catch (e) { el.innerHTML = `<span class="fail">${e.message}</span>`; return; }
+  if (info.error) { el.innerHTML = `<span class="fail">${info.error}</span>`; return; }
+
+  const m = info.mesh, r = info.resolution_cells;
+  const size = m.uniform ? `${m.smallestCell_mm.toFixed(2)} mm cells`
+    : `${m.smallestCell_mm.toFixed(2)}–${m.largestCell_mm.toFixed(1)} mm`;
+  const gapClass = r.airGap < 3 ? "fail" : r.airGap < 5 ? "warn" : "pass";
+  const saving = info.savingVsUniform > 1.5
+    ? ` · <span class="pass">${info.savingVsUniform}× fewer than uniform</span>` : "";
+  el.innerHTML =
+    `<strong>${(m.cells / 1e6).toFixed(2)} M cells</strong> ${m.dimensions.join("×")} · ${size} · ${info.memory.totalDeviceMB} MB${saving}` +
+    `<br><span class="${gapClass}">${r.airGap.toFixed(1)} cells across the air gap</span>` +
+    (m.uniform ? "" : ` · aspect ${m.worstAspectRatio.toFixed(0)}:1`) +
+    (info.notes.length ? `<br><span class="fail">${info.notes[0]}</span>` : "");
+}
+
+document.querySelectorAll("[data-mesh]").forEach(b => b.onclick = () => { setMeshMode(b.dataset.mesh); schedulePlan(); });
+for (const id of Object.keys(CONTROLS)) { const el = $("#" + id); if (el) el.addEventListener("input", schedulePlan); }
+document.addEventListener(SPEC_CHANGED, schedulePlan);
+
 /* ---- startup -------------------------------------------------------------------------------------- */
 
 window.addEventListener("resize", () => { drawSweep(); drawP2(); });
@@ -99,6 +134,7 @@ onDeviceLost(info => setStatus(`The GPU device was lost (${info.message}). Try a
 
 drawSweep();
 drawP2();
+setMeshMode("uniform");
 hookViewControls();
 updateLegend();
 hookProjectUI();
@@ -108,5 +144,6 @@ if (!navigator.gpu) {
   setStatus("WebGPU isn't available in this browser. Use a recent Chrome or Edge, or Safari 26+.", true);
 } else {
   initGPU().then(G => { ui.adapterName = G.name; }).catch(() => {});
+  refreshPlan();
   initRenderer().catch(e => { console.error(e); setStatus("The 3D view could not start: " + e.message, true); });
 }

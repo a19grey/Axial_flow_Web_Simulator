@@ -21,9 +21,11 @@ or Edge, or Safari 26+.
 **Headless.** Once, `npm install && npx playwright install chromium`. Then:
 
     node cli/run.js capabilities
-    node cli/run.js plan                                  # cells, memory, gap resolution — no solve
-    node cli/run.js solve --set design.rotor.airGap_mm=2
+    node cli/run.js plan src/cases/scale-370mm.json       # cells, memory, gap resolution — no solve
+    node cli/run.js solve src/cases/scale-370mm.json
+    node cli/run.js solve --set mesh.mode=graded --set design.rotor.airGap_mm=2
     node cli/run.js sweep --path operatingPoint.currentAngle_elecDeg --from 0 --to 180 --step 15
+    node cli/run.js convergence src/cases/scale-370mm.json --factors 0.6,0.8,1,1.3
     node cli/run.js validate
 
 Progress goes to stderr and the JSON result to stdout, so results pipe cleanly. `--set <path>=<value>`
@@ -49,7 +51,12 @@ Every numeric field carries its unit in its name.
     "backPlate": { "enabled": true, "mu_r": 20, "thickness_mm": 4, "gapBelowPcb_mm": 1 }
   },
   "operatingPoint": { "rotorAngle_deg": 0, "currentAngle_elecDeg": 45 },
-  "mesh":   { "mode": "uniform", "cellsAcrossDiameter": 128, "marginFactor": 0.4, "marginMin_mm": 12 },
+  "mesh":   { "mode": "graded",
+              "activeCellsAcrossDiameter": 160, "cellsAcrossAirGap": 6,
+              "cellsAcrossPoleHeight": 4, "cellsAcrossYoke": 3, "cellsAcrossPcb": 4,
+              "cellsAcrossBackPlate": 3, "cellsAcrossBackGap": 2,
+              "growthRatio": 1.2, "farFieldCellFactor": 8, "maxCells": 40000000,
+              "marginFactor": 0.4, "marginMin_mm": 12 },
   "solver": { "tolerance": 1e-5, "maxIterations": 4000, "checkInterval": 32, "stallPatience": 6 }
 }
 ```
@@ -68,6 +75,7 @@ Published by both pages. Every call takes plain JSON and returns plain JSON.
 | `AFS.solve(spec, opts)` | `{ok, value: {spec, specHash, results, warnings}}` |
 | `AFS.sweep(spec, sweepSpec, opts)` | one entry per point |
 | `AFS.validate(which, spec)` | the validation report, with pass/fail per case |
+| `AFS.convergence(spec, opts)` | the same design at several refinements, with a fitted order and an error bar |
 | `AFS.defaultSpec()` / `AFS.normalizeSpec(s)` | build and check a spec |
 
 `solve`, `sweep` and `validate` resolve to `{ok: true, value}` or `{ok: false, error}` rather than
@@ -120,28 +128,79 @@ material boundaries. The outer box holds φ = 0, with a margin of max(12 mm, 0.4
 
 $$T_{ij} = \frac{1}{\mu_0}\left(B_iB_j - \tfrac12\delta_{ij}B^2\right),\qquad \tau_z = \oint \big(\mathbf r\times(\mathsf T\cdot\hat{\mathbf n})\big)_z\,dA$$
 
-The box's bottom face sits in the air gap. Two boxes at different gap heights give two estimates, and
-their agreement indicates whether the grid is fine enough.
+The box's bottom face sits in the air gap. The torque is averaged over **every mesh plane in the
+central 64% of the gap**, and the spread across them is reported as the error bar.
+
+One plane is not enough: refining only z, with the in-plane mesh fixed, moved a single-plane torque
+by 2% as the plane hopped between mesh nodes, without the field meaningfully changing. Planes right
+next to the copper or right under a pole face are worse still — they sit in the trace-by-trace
+structure and the pole-edge singularity — which is why the extremes of the gap are excluded.
+
+Mean gap B_z is interpolated to exactly mid-gap rather than sampled on the nearest cell layer. The
+old definition moved 2.8% under z-refinement purely because the sampled layer moved; the new one
+moves 0.65% and does not drift.
 
 For an ideal synchronous reluctance machine τ ∝ (L_d − L_q)·I²·sin 2γ, so torque peaks near γ = 45°
 and is zero at 0° and 90°. The γ sweep plots this directly.
 
+## Meshing
+
+A uniform grid does not scale. A 370 mm machine with a 3 mm air gap needs ~1 mm cells for three
+across the gap, in a box ~520 mm on a side: about 54 million cells, of which the great majority sit
+in the bore, the box corners, or far field where nothing is happening. Six cells across the gap
+would be 432 million.
+
+Graded mode sizes each axis from the geometry instead:
+
+1. A **size function** gives the target cell size at each point — the smallest constraint covering
+   it, falling back to a far-field maximum.
+2. **Gradient limiting** caps the ratio between neighbouring cells (default 1.2), so the mesh
+   cannot jump from 0.4 mm to 8 mm in one step.
+3. Nodes are placed at equal intervals of ∫dx/s(x), which follows the size function's shape while
+   landing exactly on both ends of each interval.
+4. **Material interfaces are hard points**, so every z boundary lands on a cell face. This matters
+   as much as the grading: a partially filled cell has its permeability blended, so an air gap
+   thinner than one cell simply averages away.
+
+The result for the 370 mm case: **2.7 million cells instead of 432 million** for the same six cells
+across the gap, 289 MB instead of 46 GB, and about 1.2 s of GPU time.
+
+`AFS.plan(spec)` reports all of this — cell count, size range, aspect ratio, memory, cells across
+the gap — without solving, and the page shows it live as the mesh controls are changed.
+
+Grading buys accuracy, not just cells. On the 80 mm machine, against a 15 M-cell reference:
+
+| Mesh | Cells | Cells in gap | Torque | Error |
+|---|---|---|---|---|
+| Uniform, 200 across the box | 3,440,000 | 5.3 | 0.10773 mN·m | 7.70% |
+| Graded, 200 across the machine | 2,057,216 | 7.0 | 0.11573 mN·m | 0.84% |
+
 ## Numerics
 
-- **Grid.** Uniform cubic cells of side h = 2L/N. Resolve the air gap with at least 3 cells.
+- **Mesh.** An orthogonal tensor-product mesh: three independent lists of node coordinates. A
+  uniform grid is the case where they are evenly spaced, so there is one code path.
 - **Materials.** Rotor and back plate are rasterized with 4×4 in-plane supersampling and exact
   z-overlap. A partially filled cell uses series blending, 1/μ = (1 − f) + f/μᵣ. Face permeability is
   the harmonic mean of the two neighbouring cells. Averaging μ arithmetically instead would make a
   partial cell behave as solid iron and silently shrink the gap.
 - **Discretization.** Finite volume, 7-point stencil, one balance equation per cell:
 
-  $$\sum_f \mu_f(\varphi_c - \varphi_n) = -h\sum_f (\mu_f - 1)\,\mathbf H_{s,f}\cdot\hat{\mathbf n}_f$$
+  $$\sum_f \mu_f \frac{A_f}{d_f}(\varphi_c - \varphi_n) = -\sum_f (\mu_f - 1)A_f\,\mathbf H_{s,f}\cdot\hat{\mathbf n}_f$$
+
+  with A_f the face area and d_f the centre-to-centre distance across it. Both sides are divided by
+  a reference length, which leaves φ unchanged and keeps the coefficients near unity in f32; on a
+  uniform mesh it cancels and these reduce exactly to the single-size form μ_f and (μ_f − 1)h.
 
 - **Solver.** Jacobi-preconditioned conjugate gradients in f32 WGSL compute shaders. Dot products use
   workgroup reductions and the CG scalars stay on the GPU; only the residual is read back, once per
   check interval.
-- **B reconstruction.** Face flux is B_f = μ₀μ_f(H_s,f − Δφ/h), exactly the flux the solver balanced.
-  Cell values average the two faces per direction, so normal B stays continuous across material edges.
+- **B reconstruction.** Face flux is B_f = μ₀μ_f(H_s,f − Δφ/d_f), exactly the flux the solver
+  balanced. Cell values average the two faces per direction — the cell centre is midway between its
+  own two faces whatever the grading — so normal B stays continuous across material edges.
+- **Dispatch.** WebGPU caps workgroups per dimension at 65535, which at 64 threads runs out at
+  4.2 M cells. Every cell-wide kernel dispatches a 2D grid and linearises the index itself. The
+  device's `uncapturederror` events are latched and raised, because a rejected dispatch otherwise
+  does nothing and the solve returns a confident field of zeros.
 
 ## Validation
 
@@ -167,7 +226,8 @@ antisymmetric between 45° and 135°, and the two stress surfaces agree.
 |---|---|
 | `analytic` | the closed-form cases above |
 | `reference` | every design matches the frozen pre-split single-file build to 1e-9 relative |
-| `ui` | the real page: solve, both validation buttons, project round-trip, v1 migration, model export, view controls, and no console errors |
+| `ui` | the real page: solve, both validation buttons, project round-trip, v1 migration, model export, graded meshing, view controls, and no console errors |
+| `convergence` | the answer stops moving under refinement; grading beats uniform per cell; the 370 mm case runs; a 14 M-cell solve returns a real answer rather than zeros |
 
 `tests/reference/axial-flux-3d-webgpu.html` is the original single-file build, kept so the
 regression is reproducible indefinitely. `tests/compare-reference.js` drives it through its own
@@ -200,8 +260,11 @@ See `docs/limitations.md` for the full statement. In short:
 - **μᵣ ≲ 200.** Inside high-permeability material H is a small difference of large terms, and f32
   loses it. WebGPU has no f64. Solves past this are flagged in the results rather than failing
   silently.
-- **Uniform grid.** A 370 mm machine with a 3 mm gap cannot be resolved by a uniform grid at any
-  practical cell count. Graded meshes are the next piece of work.
+- **Cartesian mesh.** Grading removes the staircase in z entirely, because those interfaces are
+  planes that can land on cell faces. Radial and angular boundaries — the bore, the pole arcs —
+  cannot be snapped by a Cartesian mesh and are still staircased. A cylindrical (r, θ, z) backend
+  against the same mesh interface would fix that and allow sector symmetry; it is designed but not
+  built.
 - **Simplified windings.** Concentric loops rather than spirals; no vias or end connections.
 - **Magnetostatics only.** No eddy currents, hysteresis, back-EMF or time stepping.
 

@@ -14,6 +14,7 @@
 import { $ } from "../ui/dom.js";
 import { INF, DIV, lutRow, css, fmtB, pctl } from "../ui/format.js";
 import { initGPU } from "../gpu/device.js";
+import { locate } from "../core/mesh.js";
 import { buildMeshes } from "./meshes.js";
 
 /* ---- small linear algebra, column-major ---- */
@@ -42,12 +43,21 @@ const M4 = {
 
 /* ---- field lines: RK2 streamlines of B, seeded in proportion to flux ---- */
 function traceLines(sol, bScale) {
-  const { job, Bx, By, Bz } = sol, { nx, ny, nz, hm, x0, y0, z0 } = job;
-  const xmax = x0 + nx * hm, ymax = y0 + ny * hm, zmax = z0 + nz * hm, m = 1.5 * hm;
+  const { job, Bx, By, Bz } = sol, mesh = job.mesh;
+  const { nx, ny, nz, xc, yc, zc, x0, y0, z0, x1, y1, z1 } = mesh;
+  const m = 1.5 * mesh.hMax;
+
+  // Trilinear interpolation between cell centres. On a graded mesh the bracketing cell has to be
+  // found by search rather than division, and the weight is the fraction of the centre-to-centre
+  // distance rather than of a fixed cell size.
+  const brk = (c, n, v) => {
+    if (v <= c[0]) return [0, 0];
+    if (v >= c[n - 1]) return [n - 2, 1];
+    const i = locate(c, n - 1, v);
+    return [i, (v - c[i]) / (c[i + 1] - c[i])];
+  };
   const S = (x, y, z, o) => {
-    let u = (x - x0) / hm - 0.5, v = (y - y0) / hm - 0.5, w = (z - z0) / hm - 0.5;
-    u = Math.min(nx - 1.001, Math.max(0, u)); v = Math.min(ny - 1.001, Math.max(0, v)); w = Math.min(nz - 1.001, Math.max(0, w));
-    const i = u | 0, j = v | 0, k = w | 0, fu = u - i, fv = v - j, fw = w - k;
+    const [i, fu] = brk(xc, nx, x), [j, fv] = brk(yc, ny, y), [k, fw] = brk(zc, nz, z);
     o[0] = o[1] = o[2] = 0;
     for (let c = 0; c < 8; c++) {
       const di = c & 1, dj = (c >> 1) & 1, dk = c >> 2, wt = (di ? fu : 1 - fu) * (dj ? fv : 1 - fv) * (dk ? fw : 1 - fw);
@@ -69,14 +79,15 @@ function traceLines(sol, bScale) {
   }
   let seed = 12345; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
   const seeds = cand.filter(c => rnd() < 0.42 * c[2] / bmax).map(c => [c[0], c[1], zs]);
-  const ds = 0.5 * hm, floor = bScale * 1e-3, segs = [];
+  // Step along the line with the finest cell, so a line through the gap is not stepped over.
+  const ds = 0.5 * mesh.hMin, floor = bScale * 1e-3, segs = [];
   const step = (p, sgn) => {
     const b = S(p[0], p[1], p[2], o), l = Math.hypot(...b); if (l < floor) return null;
     const mid = [p[0] + sgn * b[0] / l * ds / 2, p[1] + sgn * b[1] / l * ds / 2, p[2] + sgn * b[2] / l * ds / 2];
     const b2 = S(mid[0], mid[1], mid[2], o), l2 = Math.hypot(...b2); if (l2 < floor) return null;
     return [[p[0] + sgn * b2[0] / l2 * ds, p[1] + sgn * b2[1] / l2 * ds, p[2] + sgn * b2[2] / l2 * ds], l2];
   };
-  const inside = p => p[0] > x0 + m && p[0] < xmax - m && p[1] > y0 + m && p[1] < ymax - m && p[2] > z0 + m && p[2] < zmax - m;
+  const inside = p => p[0] > x0 + m && p[0] < x1 - m && p[1] > y0 + m && p[1] < y1 - m && p[2] > z0 + m && p[2] < z1 - m;
   for (const s0 of seeds) {
     for (const sgn of [1, -1]) {
       let p = s0, lp = Math.hypot(...S(p[0], p[1], p[2], o));
@@ -304,24 +315,79 @@ export function buildSlices() {
   V.sliceBuf = pts.length ? vbuf({ data: new Float32Array(pts), count: pts.length / 3 }) : null;
   V.dirty = true;
 }
+/* The volume texture must be uniformly spaced, because the shader samples it with a hardware
+ * linear filter and one texel step has to mean one distance step. A graded mesh therefore gets
+ * resampled onto a uniform lattice covering the same box.
+ *
+ * This also caps the texture: a 12 M-cell solve does not need a 12 M-texel glow, and uploading one
+ * would cost more than the solve. The lattice is sized to the box aspect within a texel budget.
+ */
+const VIZ_TEXELS = 160 * 160 * 160;
+
+function resampleField(sol, mesh) {
+  const { Bx, By, Bz } = sol;
+  const ex = mesh.x1 - mesh.x0, ey = mesh.y1 - mesh.y0, ez = mesh.z1 - mesh.z0;
+  // Keep the texel aspect close to cubic, then scale the whole lattice into the budget.
+  const scale = Math.cbrt(VIZ_TEXELS / (ex * ey * ez));
+  const clampDim = (e, n) => Math.max(8, Math.min(n, Math.round(e * scale)));
+  const tx = clampDim(ex, mesh.nx), ty = clampDim(ey, mesh.ny), tz = clampDim(ez, mesh.nz);
+
+  // Index tables: for each texel, the mesh cell whose centre bracket contains it, plus the weight.
+  const table = (c, n, t, a, b) => {
+    const idx = new Int32Array(t), frac = new Float32Array(t);
+    for (let i = 0; i < t; i++) {
+      const v = a + (b - a) * (i + 0.5) / t;
+      if (v <= c[0]) { idx[i] = 0; frac[i] = 0; }
+      else if (v >= c[n - 1]) { idx[i] = n - 2; frac[i] = 1; }
+      else { const k = locate(c, n - 1, v); idx[i] = k; frac[i] = (v - c[k]) / (c[k + 1] - c[k]); }
+    }
+    return { idx, frac };
+  };
+  const TX = table(mesh.xc, mesh.nx, tx, mesh.x0, mesh.x1);
+  const TY = table(mesh.yc, mesh.ny, ty, mesh.y0, mesh.y1);
+  const TZ = table(mesh.zc, mesh.nz, tz, mesh.z0, mesh.z1);
+
+  const data = new Uint16Array(4 * tx * ty * tz);
+  const nx = mesh.nx, ny = mesh.ny;
+  for (let k = 0; k < tz; k++) {
+    const kz = TZ.idx[k], fw = TZ.frac[k];
+    for (let j = 0; j < ty; j++) {
+      const jy = TY.idx[j], fv = TY.frac[j];
+      for (let i = 0; i < tx; i++) {
+        const ix = TX.idx[i], fu = TX.frac[i];
+        let bx = 0, by = 0, bz = 0;
+        for (let c = 0; c < 8; c++) {
+          const di = c & 1, dj = (c >> 1) & 1, dk = c >> 2;
+          const wt = (di ? fu : 1 - fu) * (dj ? fv : 1 - fv) * (dk ? fw : 1 - fw);
+          if (wt === 0) continue;
+          const q = ((kz + dk) * ny + jy + dj) * nx + ix + di;
+          bx += wt * Bx[q]; by += wt * By[q]; bz += wt * Bz[q];
+        }
+        bx *= 1e3; by *= 1e3; bz *= 1e3;
+        const o = 4 * ((k * ty + j) * tx + i);
+        data[o] = half(bx); data[o + 1] = half(by); data[o + 2] = half(bz); data[o + 3] = half(Math.hypot(bx, by, bz));
+      }
+    }
+  }
+  return [data, tx, ty, tz];
+}
+
 export function updateScene(sol, keepView) {
   if (!V.ok) return;
-  const job = sol.job, { nx, ny, nz, hm, x0, y0, z0 } = job, N = nx * ny * nz;
+  const job = sol.job, mesh = job.mesh;
+  const { nx, ny, nz, x0, y0, z0, x1, y1, z1 } = mesh;
   V.job = job;
-  V.box = [[x0, y0, z0], [x0 + nx * hm, y0 + ny * hm, z0 + nz * hm]];
+  V.box = [[x0, y0, z0], [x1, y1, z1]];
+
+  // Colour scale from the field inside the machine, ignoring the far field where nothing happens.
   const mag = [], bzs = [];
   for (let iz = 1; iz < nz - 1; iz += 1) for (let iy = 1; iy < ny - 1; iy += 2) for (let ix = 1; ix < nx - 1; ix += 2) {
-    const x = x0 + (ix + .5) * hm, y = y0 + (iy + .5) * hm, z = z0 + (iz + .5) * hm;
+    const x = mesh.xc[ix], y = mesh.yc[iy], z = mesh.zc[iz];
     if (job.kind === "motor" && (Math.hypot(x, y) > job.g.Rro + 4 || z < (job.p.back ? job.g.zBB : -1) - 3 || z > job.g.zYT + 3)) continue;
     const k = (iz * ny + iy) * nx + ix; mag.push(Math.hypot(sol.Bx[k], sol.By[k], sol.Bz[k])); bzs.push(Math.abs(sol.Bz[k]));
   }
   V.bScale = pctl(mag, 0.99) * 1e3; V.bzScale = pctl(bzs, 0.99) * 1e3;
-  const data = new Uint16Array(4 * N);
-  for (let k = 0; k < N; k++) {
-    const bx = sol.Bx[k] * 1e3, by = sol.By[k] * 1e3, bz = sol.Bz[k] * 1e3;
-    data[4 * k] = half(bx); data[4 * k + 1] = half(by); data[4 * k + 2] = half(bz); data[4 * k + 3] = half(Math.hypot(bx, by, bz));
-  }
-  setField(data, nx, ny, nz);
+  setField(...resampleField(sol, mesh));
   for (const m of Object.values(V.mesh)) m.buf.destroy();
   V.mesh = {}; for (const [k, m] of Object.entries(buildMeshes(job))) V.mesh[k] = vbuf(m);
   const L = traceLines(sol, V.bScale * 1e-3);
@@ -330,7 +396,7 @@ export function updateScene(sol, keepView) {
     V.lines = { buf: b, count: L.count, bg: V.dev.createBindGroup({ layout: V.pl.lines.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: V.ubo } }, { binding: 1, resource: { buffer: b } }, { binding: 2, resource: V.lut.createView() }, { binding: 3, resource: V.samp }] }), seeds: L.seeds }; }
   else V.lines = null;
   const zs = $("#sliceZ");
-  zs.min = V.box[0][2]; zs.max = V.box[1][2]; zs.step = hm / 2;
+  zs.min = V.box[0][2]; zs.max = V.box[1][2]; zs.step = mesh.hMin / 2;
   if (!keepView) {
     V.opt.sliceZ = job.kind === "motor" ? (Math.max(...job.zLay) + job.g.zTB) / 2 : 0;
     const zc = job.kind === "motor" ? ((job.p.back ? job.g.zBB : -1) + job.g.zYT) / 2 : 0, R = job.kind === "motor" ? job.g.Rro : job.kind === "loop" ? job.R * 1.6 : job.a * 2.2;

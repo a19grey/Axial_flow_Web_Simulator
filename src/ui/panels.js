@@ -11,8 +11,11 @@ import { analyzeLoop, analyzeSphere } from "../core/validate.js";
 const sgn = v => (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
 export function perfPanel(sol) {
   const t = sol.t, pc = sol.pcg;
-  let rows = `<tr><td>Grid</td><td>${sol.job.nx}×${sol.job.ny}×${sol.job.nz} · ${sol.job.hm.toFixed(2)} mm</td></tr>
-    <tr class="sub"><td>Cells</td><td>${sol.N.toLocaleString()}</td></tr>`;
+  const mesh = sol.job.mesh;
+  const size = mesh.uniform ? `${mesh.hMin.toFixed(2)} mm`
+                            : `${mesh.hMin.toFixed(2)}–${mesh.hMax.toFixed(2)} mm graded`;
+  let rows = `<tr><td>Mesh</td><td>${mesh.nx}×${mesh.ny}×${mesh.nz} · ${size}</td></tr>
+    <tr class="sub"><td>Cells${mesh.uniform ? "" : " · worst aspect"}</td><td>${sol.N.toLocaleString()}${mesh.uniform ? "" : " · " + mesh.aspect.toFixed(1) + ":1"}</td></tr>`;
   if (sol.nseg) rows += `<tr><td>Biot-Savart, ${sol.nseg.toLocaleString()} segments</td><td>${t.bsCached ? "cached" : t.bs.toFixed(0) + " ms"}</td></tr>` +
     (t.bsCached ? "" : `<tr class="sub"><td>Throughput</td><td>${(sol.N * sol.nseg / t.bs / 1e6).toFixed(0)} G segment-cell/s</td></tr>`);
   if (pc) rows += `<tr><td>Potential solve</td><td>${pc.iters} it · ${pc.ms.toFixed(0)} ms</td></tr>
@@ -25,14 +28,15 @@ export function resultPanel(sol) {
   if (k === "motor") {
     const m = sol.m, I = sol.I, T = m.T;
     $("#resTitle").textContent = "Torque and gap field";
-    if (!T.length) { $("#res").innerHTML = `<span class="fail">The air gap is thinner than one grid cell, so no torque surface fits in it. Use a finer grid or a larger gap.</span>`; return; }
-    const Tm = T.reduce((a, b) => a + b, 0) / T.length, agree = T.length > 1 ? Math.abs(T[0] - T[1]) / Math.max(1e-12, Math.abs(Tm)) * 100 : null;
+    if (!T.length) { $("#res").innerHTML = `<span class="fail">The air gap is thinner than one grid cell, so no torque surface fits in it. Use a finer mesh or a larger gap.</span>`; return; }
+    const Tm = m.torque, agree = m.torqueSpread_pct;
     $("#res").innerHTML = `
       <div class="muted" style="font-size:13px">Torque on rotor</div>
       <div class="big">${(Tm * 1e3).toFixed(3)} mN·m</div>
-      <div style="font-size:13px;margin-bottom:8px">${agree === null ? "One stress surface fits in the gap." : `Two stress surfaces agree within <span class="${agree < 10 ? "pass" : "fail"}">${agree.toFixed(1)}%</span>`}</div>
+      <div style="font-size:13px;margin-bottom:8px">${agree === null ? "Only one stress surface fits in the gap, so there is no spread to report." : `Mean of ${T.length} stress surfaces across the gap, spread <span class="${agree < 5 ? "pass" : "fail"}">${agree.toFixed(2)}%</span>`}</div>
       <table>
-        ${T.map((v, i) => `<tr class="sub"><td>Surface ${i + 1}, z = ${(sol.job.z0 + m.planes[i] * sol.job.hm).toFixed(2)} mm</td><td>${(v * 1e3).toFixed(3)} mN·m</td></tr>`).join("")}
+        ${T.length > 1 ? `<tr class="sub"><td>Range over the ${T.length} surfaces</td><td>${(Math.min(...T) * 1e3).toFixed(4)} – ${(Math.max(...T) * 1e3).toFixed(4)} mN·m</td></tr>` : ""}
+        <tr class="sub"><td>Surfaces at z</td><td>${m.planeZ_mm[0].toFixed(2)} – ${m.planeZ_mm[m.planeZ_mm.length - 1].toFixed(2)} mm</td></tr>
         <tr><td>Phase currents A · B · C</td><td>${I.map(v => v.toFixed(2)).join(" · ")} A</td></tr>
         <tr><td>Mean |B<sub>z</sub>| mid-gap over coils</td><td>${fmtB(m.gapBz)}</td></tr>
         <tr><td>Peak |B| in magnetic parts</td><td>${fmtB(m.bmaxMat)}</td></tr>

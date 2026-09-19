@@ -45,20 +45,26 @@ flux density. The nonlinear machinery is a μ(|B|) update loop around the existi
 the next substantial piece of physics work; note that it interacts with the ceiling above, since
 the materials most worth saturating are also the ones past it until the formulation changes.
 
-## Uniform grid
+## Cartesian mesh: in-plane boundaries are still staircased
 
-Cells are cubes of a single size across the whole box, sized as 2L/N where L includes a margin of
-max(12 mm, 0.4·Rₒ) around the machine.
+Grading removes the z-direction staircase completely, because the interfaces that matter there — the
+PCB faces, the pole face, the yoke, the back plate — are planes, and the mesh generator makes every
+one of them a cell face.
 
-This does not scale. A 370 mm machine with a 3 mm air gap needs h ≈ 1 mm for three cells across the
-gap, in a box roughly 520 mm on a side — about 116 million cells, of which some 88% are in the bore,
-the box corners, or far field where nothing is happening. Run `node cli/run.js plan` on such a design
-and it will say so.
+Radial and angular boundaries cannot be treated the same way. The bore, the outer rim and the pole
+arcs are curved surfaces that no Cartesian tensor mesh can land on, so they remain staircased and
+their cells carry a blended permeability. In-plane refinement converges smoothly (measured: the
+80 mm machine's torque rises monotonically from 0.11477 to 0.11851 mN·m as the in-plane count goes
+from 100 to 400, with the steps shrinking), so this is an accuracy cost rather than a correctness
+problem — but it is the dominant remaining discretization error.
 
-The fix is a graded mesh: per-axis non-uniform spacing driven by a size function, fine through the
-gap and stretched into the far field, with grid nodes snapped exactly onto material interfaces. That
-removes the z-direction staircase error at the same time, because a partly filled cell currently
-blends its permeability and a gap thinner than one cell simply averages away.
+A cylindrical (r, θ, z) backend against the same mesh interface would fix it: the bore, the rim and
+the pole arcs all become coordinate surfaces, and one pole pair could be modelled with anti-periodic
+boundaries instead of the whole machine. It is designed but not built.
+
+Uniform mode is retained, and is still the right choice for a small machine or for cross-checking
+the graded path, but it does not scale: the 370 mm case needs 54 million cells for three across the
+gap and 432 million for six. `node cli/run.js plan` reports this before you commit to a solve.
 
 ## Simplified windings
 
@@ -74,16 +80,26 @@ inferred by sweeping rotor angle or current angle. There is also no flux linkage
 or core loss, and no mass or torque density, so the tool computes a field but does not yet
 characterize a machine.
 
-## Grid-limited accuracy
+## Mesh-limited accuracy
 
 Gap field and torque accuracy depend on how many cells span the gap. Fewer than three and the result
 is not meaningful; the results carry a `gapUnresolved` error flag below three and a `gapCoarse`
-warning below five. Close agreement between the two Maxwell-stress surfaces is the practical
-convergence check, and a `surfaceDisagreement` flag fires past 10%.
+warning below five.
 
-Both stress surfaces use the same method, so their agreement bounds the discretization error but not
-a systematic error in the method itself. A virtual-work torque would be a genuinely independent
-second estimate; it does not exist yet.
+Torque is averaged over every stress plane in the central band of the gap and the spread across them
+is reported; `surfaceDisagreement` fires past 5%. That spread tracks the real discretization error
+reasonably well (1–3% where refinement shows the answer is 0.3–0.8% from converged), but every plane
+uses the same method, so it bounds the discretization error and not a systematic error in the method
+itself. A virtual-work torque would be a genuinely independent second estimate; it does not exist
+yet.
+
+`node cli/run.js convergence` is the real check: it solves the same design at several refinements
+and reports how far the finest one is from the extrapolated limit.
+
+One quantity converges less cleanly than the rest. Reluctance torque is the difference between the
+d- and q-axis reluctances, so on a small machine it is a small number carrying the discretization
+error of two larger ones, and it settles into a band of a percent or two rather than onto a value.
+The 370 mm machine, whose features span many more cells, settles to 0.3%.
 
 ## Software-adapter fallback
 

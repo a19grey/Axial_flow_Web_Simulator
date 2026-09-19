@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
+
+      # CI runners have no GPU, so every suite runs on SwiftShader. Fields are still correct, so
+      # the analytic cases are a real check; timings in the output are not meaningful and the
+      # reference comparison is skipped because it is far too slow on a software adapter.
+      - name: Analytic validation cases
+        run: node cli/run.js validate --allow-software --quiet
+
+      - name: Full-page smoke test
+        run: node tests/smoke-ui.js --allow-software

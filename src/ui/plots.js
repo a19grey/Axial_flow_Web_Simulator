@@ -54,11 +54,11 @@ export function drawP2() {
   const sol = ui.sol, cv = $("#p2");
   if (sol && sol.job.kind === "loop") {
     $("#p2title").textContent = "Loop test: axial field on the axis";
-    const { job } = sol, pts = [], ana = [];
-    for (let iz = 1; iz < job.nz - 1; iz++) { const z = job.z0 + (iz + .5) * job.hm; pts.push([z, interpCentre(sol.Bz, job, iz) * 1e6]); }
-    for (let z = job.z0; z <= -job.z0; z += 0.5) ana.push([z, MU0 * job.R ** 2 / (2 * ((job.R * 1e-3) ** 2 + (z * 1e-3) ** 2) ** 1.5) * 1e-6 * 1e6]);
+    const { job } = sol, m = job.mesh, pts = [], ana = [];
+    for (let iz = 1; iz < m.nz - 1; iz++) pts.push([m.zc[iz], interpCentre(sol.Bz, job, iz) * 1e6]);
+    for (let z = m.z0; z <= m.z1; z += 0.5) ana.push([z, MU0 * job.R ** 2 / (2 * ((job.R * 1e-3) ** 2 + (z * 1e-3) ** 2) ** 1.5) * 1e-6 * 1e6]);
     const ymax = Math.max(...ana.map(p => p[1])) * 1.1;
-    drawPlot(cv, { xr: [job.z0, -job.z0], yr: [0, ymax], xticks: niceTicks(job.z0, -job.z0), yticks: niceTicks(0, ymax), xfmt: v => v, yfmt: v => v.toFixed(0), xlabel: "z on axis (mm)", ylabel: "B_z (μT per A)",
+    drawPlot(cv, { xr: [m.z0, m.z1], yr: [0, ymax], xticks: niceTicks(m.z0, m.z1), yticks: niceTicks(0, ymax), xfmt: v => v, yfmt: v => v.toFixed(0), xlabel: "z on axis (mm)", ylabel: "B_z (μT per A)",
       series: [{ pts: ana, color: css("--muted"), label: "analytic" }, { pts, style: "dots", color: css("--gpu"), label: "GPU Biot-Savart" }] });
     return;
   }

@@ -8,6 +8,19 @@ import { SH } from "./shaders.js";
 
 let gpu = null;
 const lostHandlers = new Set();
+const pendingErrors = [];
+
+/* Throw if the device reported an error since the last check, so a silent no-op dispatch becomes a
+ * visible failure instead of a plausible-looking zero. */
+export function checkDeviceErrors(context) {
+  if (!pendingErrors.length) return;
+  const all = pendingErrors.splice(0, pendingErrors.length);
+  throw new Error(`The GPU rejected work during ${context}: ${all[0]}` +
+                  (all.length > 1 ? ` (and ${all.length - 1} more)` : "") +
+                  ". The result would have been wrong, so it was discarded.");
+}
+
+export function clearDeviceErrors() { pendingErrors.length = 0; }
 
 /* Notified when the adapter drops the device (usually an out-of-memory grid). */
 export function onDeviceLost(fn) { lostHandlers.add(fn); return () => lostHandlers.delete(fn); }
@@ -26,6 +39,16 @@ export async function initGPU() {
   device.lost.then(info => {
     gpu = null;
     for (const fn of lostHandlers) { try { fn(info); } catch (e) { console.error(e); } }
+  });
+
+  /* WebGPU reports validation and out-of-memory failures asynchronously. Without this listener a
+   * rejected dispatch simply does nothing and the solve returns a field of zeros — which is how a
+   * mesh past the workgroup-per-dimension cap used to produce a confident torque of 0.000. Errors
+   * are latched and raised by the next checkDeviceErrors(). */
+  device.addEventListener("uncapturederror", ev => {
+    const msg = ev.error?.message || String(ev.error);
+    pendingErrors.push(msg);
+    console.error("WebGPU error:", msg);
   });
   const mk = (code, constants) => device.createComputePipeline({
     layout: "auto",
