@@ -1,0 +1,17 @@
+{
+  "name": "axial-flow-web-simulator",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Client-side WebGPU magnetostatic field solver and design test bed for axial-flux machines.",
+  "license": "MIT",
+  "scripts": {
+    "serve": "python3 -m http.server 8080",
+    "cli": "node cli/run.js",
+    "test": "node tests/run-tests.js",
+    "capabilities": "node cli/run.js capabilities"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}

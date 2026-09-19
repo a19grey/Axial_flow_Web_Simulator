@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Axial-flux solver — headless</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 24px; max-width: 70ch; color: #17202B; background: #E8ECF1 }
+  @media (prefers-color-scheme: dark) { body { color: #E3E8EE; background: #11151B } }
+  code { font-weight: 600 }
+</style>
+</head>
+<body>
+<h1>Axial-flux solver, headless</h1>
+<p>No interface. This page exists so a script can drive the solver without the 3D view or the
+controls. The API is on <code>window.AFS</code> and is the same module the full page uses.</p>
+<pre id="status">loading…</pre>
+<p>From a driver: <code>await window.AFS.solve(spec)</code>, <code>.sweep(spec, sweepSpec)</code>,
+<code>.validate("all")</code>, <code>.plan(spec)</code>, <code>.capabilities()</code>. Each returns
+<code>{ok, value}</code> or <code>{ok:false, error}</code>.</p>
+<p>The command-line driver is <code>node cli/run.js</code> in this repository.</p>
+
+<script type="module">
+import AFS from "./src/afs.js";
+const el = document.getElementById("status");
+try {
+  const c = await AFS.capabilities();
+  el.textContent = `ready\nAPI     ${c.apiVersion}\nspec    v${c.specVersion}\nadapter ${c.adapter}${c.software ? "  [SOFTWARE — timings meaningless]" : ""}\nmax cells by binding ${c.maxCellsByBinding.toLocaleString()}`;
+} catch (e) {
+  el.textContent = "WebGPU unavailable: " + e.message;
+}
+</script>
+</body>
+</html>

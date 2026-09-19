@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Axial-flux 3D field solver — WebGPU</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#E8ECF1; --panel:#F7F9FB; --ink:#17202B; --muted:#586676; --line:#C8D0DA;
+  --gpu:#2F55C9; --good:#237A4B; --warn:#B3261E;
+  --pa:#D0453A; --pb:#2E9E5B; --pc:#3569D6;
+  --radius:6px;
+  font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-variant-numeric:tabular-nums;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#11151B; --panel:#1A2028; --ink:#E3E8EE; --muted:#93A1B2; --line:#2D3643;
+    --gpu:#86A2FF; --good:#5CC28C; --warn:#FF8A80; --pa:#FF7A6E; --pb:#5CD08F; --pc:#7FA4FF;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#11151B; --panel:#1A2028; --ink:#E3E8EE; --muted:#93A1B2; --line:#2D3643;
+  --gpu:#86A2FF; --good:#5CC28C; --warn:#FF8A80; --pa:#FF7A6E; --pb:#5CD08F; --pc:#7FA4FF;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.5}
+header{padding:28px 28px 8px;max-width:1560px;margin:0 auto}
+h1{font-family:"IBM Plex Sans Condensed","IBM Plex Sans",sans-serif;font-weight:600;font-size:clamp(26px,3.4vw,40px);line-height:1.1;margin:0 0 8px;letter-spacing:-.01em}
+.lede{margin:0;color:var(--muted);max-width:80ch}
+.layout{display:grid;grid-template-columns:270px minmax(0,1fr) 320px;gap:20px;padding:20px 28px;max-width:1560px;margin:0 auto;align-items:start}
+@media (max-width:1150px){.layout{grid-template-columns:270px minmax(0,1fr)}.results{grid-column:1/-1}}
+@media (max-width:760px){.layout{grid-template-columns:1fr;padding:16px}header{padding:20px 16px 4px}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+h2{font-size:15px;font-weight:600;margin:0 0 8px}
+h3{font-size:13px;font-weight:600;margin:14px 0 2px;color:var(--muted)}
+label{display:block;font-size:13px;color:var(--muted);margin:8px 0 2px}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pair label{margin-top:8px}
+input,select{width:100%;font:inherit;font-size:14px;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:5px 7px}
+input[type=checkbox]{width:auto}
+input[type=range]{padding:0}
+button{font:inherit;font-size:14px;border-radius:4px;border:1px solid var(--line);background:var(--bg);color:var(--ink);padding:7px 10px;cursor:pointer}
+button.primary{background:var(--gpu);border-color:var(--gpu);color:#fff;font-weight:500}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) button.primary{color:#0D1320}}
+:root[data-theme="dark"] button.primary{color:#0D1320}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--gpu);outline-offset:2px}
+.actions{display:grid;gap:8px;margin-top:14px}
+.status{font-size:13px;color:var(--muted);margin-top:12px;min-height:40px;white-space:pre-line}
+.status.err{color:var(--warn)}
+.views{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width:0}
+.view{background:#05070A;border-radius:var(--radius);overflow:hidden;position:relative}
+.view canvas{display:block;width:100%;height:auto}
+.vhead{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.vhead h2{margin:0}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.seg button{border:0;border-radius:0;font-size:13px;padding:4px 10px;background:transparent}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.zrow{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted);margin-top:8px}
+.zrow input{flex:1}
+.cbar{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-top:6px}
+.cbar canvas{flex:1;height:10px;border-radius:2px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td{padding:5px 0;border-bottom:1px solid var(--line);vertical-align:top}
+td:last-child{text-align:right;white-space:nowrap}
+tr.sub td{color:var(--muted);border-bottom-style:dotted}
+.results .panel+.panel{margin-top:16px}
+.pass{color:var(--good);font-weight:600}.fail{color:var(--warn);font-weight:600}
+.warn{color:var(--muted)}
+#quality{border-top:1px solid var(--line);margin-top:10px;padding-top:4px}
+.big{font-family:"IBM Plex Sans Condensed",sans-serif;font-size:30px;font-weight:600;line-height:1;margin:4px 0 2px}
+.muted{color:var(--muted)}
+.plots{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:0 28px 20px;max-width:1560px;margin:0 auto}
+@media (max-width:900px){.plots{grid-template-columns:1fr;padding:0 16px 16px}}
+.plots canvas{width:100%;height:260px;display:block}
+.notes{max-width:1560px;margin:0 auto;padding:0 28px 40px;color:var(--muted);font-size:14px}
+.notes p{max-width:82ch}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:6px;flex-wrap:wrap}
+.sw{display:inline-block;width:12px;height:3px;border-radius:1px;vertical-align:middle;margin-right:5px}
+[hidden]{display:none!important}
+.view3d{position:relative;background:#0B0F15;border-radius:var(--radius);overflow:hidden;aspect-ratio:16/11;max-height:82vh;max-width:100%;touch-action:none}
+.view3d canvas{width:100%;height:100%;display:block;cursor:grab}
+.view3d canvas:active{cursor:grabbing}
+.empty{position:absolute;inset:0;display:grid;place-items:center;color:#9AA8B8;font-size:14px;text-align:center;padding:24px;pointer-events:none}
+.tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px 22px;margin-top:14px}
+.tgroup h3{margin:0 0 6px;color:var(--ink);font-size:14px}
+.tgroup .seg{margin:2px 0 6px}
+.chk{display:flex;gap:8px;align-items:center;color:var(--ink);margin:4px 0;font-size:14px}
+.legendrow{display:grid;gap:2px;margin-top:8px}
+.legendrow .cbar span:last-child{min-width:130px}
+.small{font-size:12px}
+textarea{width:100%;font:inherit;font-size:14px;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:5px 7px;resize:vertical}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.row2 button{font-size:13px;padding:7px 8px}
+.linkish{background:none;border:0;padding:0;color:var(--gpu);font-weight:600;text-align:left;cursor:pointer;font-size:13px}
+.linkish:hover{text-decoration:underline}
+table.lib td{vertical-align:top;padding:7px 0}
+table.lib td:nth-child(2){text-align:right;padding-right:8px}
+details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Axial-flux field solver in 3D, on the GPU</h1>
+  <p class="lede">PCB traces become line-current segments whose free-space field is summed by Biot-Savart in a compute shader. The magnetic rotor and back plate then respond through a reduced scalar potential: H = H<sub>s</sub> − ∇φ, with ∇·(μ∇φ) = ∇·(μH<sub>s</sub>), solved by conjugate gradients on a 3D grid. Torque comes from the Maxwell stress tensor on a box around the rotor.</p>
+</header>
+
+<main class="layout">
+  <aside class="panel" aria-label="Model parameters">
+    <h2>Stator PCB</h2>
+    <div class="pair">
+      <div><label for="poles">Rotor poles</label>
+        <select id="poles"><option value="4" selected>4 poles · 6 coils</option><option value="6">6 poles · 9 coils</option><option value="8">8 poles · 12 coils</option></select></div>
+      <div><label for="layers">Copper layers</label>
+        <select id="layers"><option value="2" selected>2</option><option value="4">4</option></select></div>
+    </div>
+    <div class="pair">
+      <div><label for="ri">Inner radius (mm)</label><input id="ri" type="number" value="15" step="1"></div>
+      <div><label for="ro">Outer radius (mm)</label><input id="ro" type="number" value="40" step="1"></div>
+    </div>
+    <div class="pair">
+      <div><label for="turns">Turns per layer</label><input id="turns" type="number" value="10" min="1" step="1"></div>
+      <div><label for="amps">Peak current (A)</label><input id="amps" type="number" value="5" step="0.5"></div>
+    </div>
+    <h2 style="margin-top:16px">Rotor</h2>
+    <div class="pair">
+      <div><label for="gap">Air gap (mm)</label><input id="gap" type="number" value="3" step="0.5" min="0.5"></div>
+      <div><label for="murRot">Rotor μᵣ</label><input id="murRot" type="number" value="20" step="1" min="1"></div>
+    </div>
+    <div class="pair">
+      <div><label for="tooth">Pole height (mm)</label><input id="tooth" type="number" value="3" step="0.5" min="0.5"></div>
+      <div><label for="yoke">Yoke thickness (mm)</label><input id="yoke" type="number" value="4" step="0.5" min="0.5"></div>
+    </div>
+    <label for="arc">Pole arc, fraction of pole pitch</label><input id="arc" type="number" value="0.5" step="0.05" min="0.1" max="0.95">
+    <label style="display:flex;gap:8px;align-items:center;margin-top:14px;color:var(--ink);font-weight:600"><input id="back" type="checkbox" checked> Back plate under PCB</label>
+    <div class="pair">
+      <div><label for="murBack">Back plate μᵣ</label><input id="murBack" type="number" value="20" step="1" min="1"></div>
+      <div><label for="backT">Thickness (mm)</label><input id="backT" type="number" value="4" step="0.5" min="0.5"></div>
+    </div>
+    <label for="backGap">Gap below PCB (mm)</label><input id="backGap" type="number" value="1" step="0.5" min="0">
+    <h2 style="margin-top:16px">Operating point</h2>
+    <div class="pair">
+      <div><label for="theta">Rotor angle (° mech)</label><input id="theta" type="number" value="0" step="5"></div>
+      <div><label for="gamma">Current angle γ (° elec)</label><input id="gamma" type="number" value="45" step="5"></div>
+    </div>
+    <label for="grid">Grid across diameter</label>
+    <select id="grid"><option value="96">96 cells (fast)</option><option value="128" selected>128 cells</option><option value="160">160 cells</option></select>
+    <div class="actions">
+      <button id="solve" class="primary">Solve</button>
+      <button id="sweep">Sweep current angle γ</button>
+      <button id="stop" disabled>Stop</button>
+    </div>
+    <details>
+      <summary>Validation tests</summary>
+      <div class="actions">
+        <button id="vLoop">Circular loop vs analytic axis field</button>
+        <button id="vSphere">Magnetic sphere in uniform field</button>
+      </div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">The sphere test uses the rotor μᵣ above. The analytic interior field is 3μᵣ/(μᵣ+2) · μ₀H₀.</p>
+    </details>
+    <div id="status" class="status" role="status"></div>
+  </aside>
+
+  <section class="views" aria-label="3D view">
+    <div>
+      <div class="vhead"><h2>3D view</h2><span class="muted" style="font-size:13px">Drag to orbit, shift-drag to pan, scroll to zoom, double-click to reset</span></div>
+      <div class="view3d"><canvas id="gl" aria-label="3D model with magnetic field"></canvas><div id="empty" class="empty">Press Solve. The machine and its field appear here in 3D.</div></div>
+      <div class="legendrow">
+        <div class="cbar"><span>0</span><canvas id="barB" width="256" height="1"></canvas><span id="barBmax">–</span><span class="muted">|B| in volume and field lines</span></div>
+        <div class="cbar" id="sliceLegend" hidden><span id="barSmin">–</span><canvas id="barS" width="256" height="1"></canvas><span id="barSmax">–</span><span class="muted">slice colour</span></div>
+      </div>
+      <div class="tools">
+        <div class="tgroup"><h3>Field</h3>
+          <label class="chk"><input type="checkbox" id="oVolume" checked> Volume glow of |B|</label>
+          <label class="chk"><input type="checkbox" id="oLines" checked> Field lines</label>
+          <label for="oDensity">Volume density</label><input id="oDensity" type="range" min="0" max="1.5" step="0.01" value="0.35">
+          <label for="oThr">Volume threshold</label><input id="oThr" type="range" min="0" max="0.9" step="0.01" value="0.18">
+          <div id="lineInfo" class="muted small" style="margin-top:6px"></div>
+        </div>
+        <div class="tgroup"><h3>Slice</h3>
+          <div class="seg" role="group" aria-label="Slice"><button data-slice="off" aria-pressed="true">Off</button><button data-slice="gap" aria-pressed="false">Gap plane</button><button data-slice="axial" aria-pressed="false">Axial section</button></div>
+          <div class="seg" role="group" aria-label="Slice colour"><button data-sfield="bz" aria-pressed="true">B<sub>z</sub></button><button data-sfield="bmag" aria-pressed="false">|B|</button></div>
+          <label for="sliceZ">Gap plane height, <span id="sliceZval">–</span></label><input id="sliceZ" type="range" min="-10" max="10" step="0.1" value="0">
+        </div>
+        <div class="tgroup"><h3>Geometry</h3>
+          <div class="seg" role="group" aria-label="Rotor"><button data-rotor="solid" aria-pressed="false">Rotor solid</button><button data-rotor="ghost" aria-pressed="true">Ghost</button><button data-rotor="hidden" aria-pressed="false">Hidden</button></div>
+          <label class="chk"><input type="checkbox" id="oPcb" checked> Stator PCB</label>
+          <label class="chk"><input type="checkbox" id="oBack" checked> Back plate</label>
+          <label class="chk"><input type="checkbox" id="oCut"> Cutaway at y = 0</label>
+        </div>
+      </div>
+      <div class="legend"><span><span class="sw" style="background:var(--pa)"></span>Phase A traces</span><span><span class="sw" style="background:var(--pb)"></span>Phase B</span><span><span class="sw" style="background:var(--pc)"></span>Phase C</span></div>
+    </div>
+  </section>
+
+  <aside class="results" aria-label="Results">
+    <div class="panel"><h2>Project</h2>
+      <label for="projName">Name</label><input id="projName" type="text" placeholder="Untitled motor" maxlength="80">
+      <label for="projNotes">Notes</label><textarea id="projNotes" rows="2" placeholder="What this variant is testing"></textarea>
+      <div class="row2">
+        <button id="projSaveFile" class="primary" disabled>Save project file</button>
+        <button id="projOpen">Open project file</button>
+        <button id="projSaveLib">Save in this browser</button>
+        <button id="projExport" disabled>Export 3D model</button>
+      </div>
+      <p id="dlNote" class="muted small" style="margin:8px 0 0" hidden>File saving and model export work on the published page. Saving in this browser and opening project files work here too.</p>
+      <input id="projFile" type="file" accept=".json,application/json" hidden>
+      <h3 style="margin-top:16px">Saved in this browser</h3>
+      <div id="library"></div>
+    </div>
+    <div class="panel"><h2 id="resTitle">Result</h2><div id="res" class="muted">Press Solve to compute the field for the current design.</div>
+      <div id="quality" hidden></div></div>
+    <div class="panel"><h2>Solver</h2><div id="perf" class="muted">No solve yet.</div></div>
+  </aside>
+</main>
+
+<section class="plots">
+  <div class="panel"><h2>Torque vs current angle <span class="muted" style="font-weight:400">— reluctance torque should follow sin 2γ</span></h2><canvas id="sweepPlot"></canvas></div>
+  <div class="panel"><h2 id="p2title">Convergence</h2><canvas id="p2"></canvas></div>
+</section>
+
+<section class="notes">
+  <p>The PCB is non-magnetic and carries the currents, so its field is exact free-space Biot-Savart. Traces are modelled as concentric trapezoidal loops per layer, a close stand-in for spiral coils. Per-phase fields are computed once per geometry and cached, so changing current angle or rotor position only re-runs the potential solve. Changing rotor position re-rasterizes the materials, while the traces stay put.</p>
+  <p>The reduced scalar potential is accurate for moderate permeability, which suits iron-filled filament. At steel-like μᵣ in the hundreds or thousands, H inside the material becomes a small difference of two large numbers, and f32 loses it. The sphere test at μᵣ = 2000 shows this directly. The standard fix is the two-potential method, which uses the total potential inside iron.</p>
+  <p>Project files are plain JSON with units in every field name. They hold the design parameters, view settings and a summary of the last solve, but not the field itself; opening one re-solves, which reproduces the result. The model export is a zip with an OBJ of every part, printable STLs, and an SVG of the copper pattern.</p>
+  <p>The 3D view draws the machine from its analytic geometry (smooth arcs, trace ribbons), not the solver grid. The field is uploaded as a filtered 3D texture and ray-marched on the GPU; field lines are streamlines of B traced through that same field. The outer box is held at φ = 0, with a margin around the machine. Torque is integrated on two box surfaces whose bottom faces sit at different heights in the air gap. Close agreement between the two estimates is a useful check on grid resolution.</p>
+</section>
+
+<script type="module" src="./src/ui/app.js"></script>
+</body>
+</html>

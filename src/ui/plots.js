@@ -1,0 +1,71 @@
+/* Canvas plots: the torque-vs-current-angle sweep and the convergence / loop-validation panel. */
+
+import { $, ui } from "./dom.js";
+import { css } from "./format.js";
+import { MU0 } from "../core/constants.js";
+import { interpCentre } from "../core/torque.js";
+
+function niceTicks(a, b, count = 5) {
+  const raw = (b - a) / count || 1, mag = 10 ** Math.floor(Math.log10(Math.abs(raw))), e = raw / mag;
+  const step = mag * (e < 1.5 ? 1 : e < 3 ? 2 : e < 7 ? 5 : 10), t = [];
+  for (let v = Math.ceil(a / step) * step; v <= b + step * 1e-9; v += step) t.push(+v.toFixed(10));
+  return t;
+}
+function drawPlot(cv, cfg) {
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const ink = css("--ink"), muted = css("--muted"), line = css("--line");
+  const m = { l: 58, r: 12, t: 12, b: 38 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const [x0, x1] = cfg.xr, [y0, y1] = cfg.yr;
+  const X = x => m.l + (x - x0) / (x1 - x0) * pw, Y = y => m.t + ph - (y - y0) / (y1 - y0) * ph;
+  g.font = "12px IBM Plex Sans, sans-serif"; g.lineWidth = 1; g.strokeStyle = line; g.fillStyle = muted;
+  g.textAlign = "right"; g.textBaseline = "middle";
+  for (const t of cfg.yticks) { g.beginPath(); g.moveTo(m.l, Y(t)); g.lineTo(m.l + pw, Y(t)); g.stroke(); g.fillText(cfg.yfmt(t), m.l - 6, Y(t)); }
+  g.textAlign = "center"; g.textBaseline = "top";
+  for (const t of cfg.xticks) g.fillText(cfg.xfmt(t), X(t), m.t + ph + 6);
+  g.fillText(cfg.xlabel, m.l + pw / 2, H - 16);
+  g.save(); g.translate(12, m.t + ph / 2); g.rotate(-Math.PI / 2); g.textBaseline = "middle"; g.fillText(cfg.ylabel, 0, 0); g.restore();
+  g.save(); g.beginPath(); g.rect(m.l, m.t, pw, ph); g.clip();
+  for (const s of cfg.series) {
+    g.strokeStyle = g.fillStyle = s.color; g.lineWidth = 2;
+    if (s.style === "dots") for (const [x, y] of s.pts) { g.beginPath(); g.arc(X(x), Y(y), 4, 0, 7); g.fill(); }
+    else { g.beginPath(); s.pts.forEach(([x, y], i) => i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y))); g.stroke(); }
+  }
+  g.restore();
+  let lx = m.l + 10; g.textAlign = "left"; g.textBaseline = "middle";
+  for (const s of cfg.series) { g.fillStyle = s.color; g.fillRect(lx, m.t + 8, 10, 3); g.fillStyle = ink; g.fillText(s.label, lx + 14, m.t + 10); lx += g.measureText(s.label).width + 34; }
+}
+export function drawSweep() {
+  const sw = ui.sweep, cv = $("#sweepPlot");
+  if (!sw || !sw.pts.length) { drawPlot(cv, { xr: [0, 180], yr: [-1, 1], xticks: niceTicks(0, 180, 6), yticks: niceTicks(-1, 1), xfmt: v => v + "°", yfmt: v => v, xlabel: "current angle γ (electrical)", ylabel: "torque (mN·m)", series: [] }); return; }
+  const pts = sw.pts.map(([g, T]) => [g, T * 1e3]);
+  let a = 0, b = 0, ss = 0, cc = 0, sc = 0;
+  for (const [g, T] of pts) { const s = Math.sin(2 * g * Math.PI / 180), c = Math.cos(2 * g * Math.PI / 180); a += T * s; b += T * c; ss += s * s; cc += c * c; sc += s * c; }
+  const det = ss * cc - sc * sc, A = det ? (a * cc - b * sc) / det : 0, Bc = det ? (b * ss - a * sc) / det : 0;
+  const fit = []; for (let g = 0; g <= 180; g += 2) fit.push([g, A * Math.sin(2 * g * Math.PI / 180) + Bc * Math.cos(2 * g * Math.PI / 180)]);
+  const ymax = Math.max(1e-6, ...pts.map(p => Math.abs(p[1])), ...fit.map(p => Math.abs(p[1]))) * 1.15;
+  sw.fit = { amp: Math.hypot(A, Bc), peak: ((Math.atan2(A, Bc) * 180 / Math.PI) / 2 + 180) % 180 };
+  drawPlot(cv, { xr: [0, 180], yr: [-ymax, ymax], xticks: niceTicks(0, 180, 6), yticks: niceTicks(-ymax, ymax),
+    xfmt: v => v + "°", yfmt: v => Math.abs(ymax) < 1 ? v.toFixed(2) : v.toFixed(1), xlabel: "current angle γ (electrical)", ylabel: "torque (mN·m)",
+    series: [{ pts: fit, color: css("--muted"), label: `sin 2γ fit, peak ${sw.fit.amp.toFixed(2)} mN·m at ${sw.fit.peak.toFixed(0)}°` }, { pts, style: "dots", color: css("--gpu"), label: "GPU solve" }] });
+}
+export function drawP2() {
+  const sol = ui.sol, cv = $("#p2");
+  if (sol && sol.job.kind === "loop") {
+    $("#p2title").textContent = "Loop test: axial field on the axis";
+    const { job } = sol, pts = [], ana = [];
+    for (let iz = 1; iz < job.nz - 1; iz++) { const z = job.z0 + (iz + .5) * job.hm; pts.push([z, interpCentre(sol.Bz, job, iz) * 1e6]); }
+    for (let z = job.z0; z <= -job.z0; z += 0.5) ana.push([z, MU0 * job.R ** 2 / (2 * ((job.R * 1e-3) ** 2 + (z * 1e-3) ** 2) ** 1.5) * 1e-6 * 1e6]);
+    const ymax = Math.max(...ana.map(p => p[1])) * 1.1;
+    drawPlot(cv, { xr: [job.z0, -job.z0], yr: [0, ymax], xticks: niceTicks(job.z0, -job.z0), yticks: niceTicks(0, ymax), xfmt: v => v, yfmt: v => v.toFixed(0), xlabel: "z on axis (mm)", ylabel: "B_z (μT per A)",
+      series: [{ pts: ana, color: css("--muted"), label: "analytic" }, { pts, style: "dots", color: css("--gpu"), label: "GPU Biot-Savart" }] });
+    return;
+  }
+  $("#p2title").textContent = "Convergence of the potential solve";
+  const h = sol && sol.pcg ? sol.pcg.hist.map(([i, r]) => [i, Math.log10(Math.max(r, 1e-12))]) : [];
+  const xm = Math.max(32, ...h.map(p => p[0])), ym = Math.min(-6, Math.floor(Math.min(0, ...h.map(p => p[1]))));
+  drawPlot(cv, { xr: [0, xm], yr: [ym, 0.3], xticks: niceTicks(0, xm), yticks: niceTicks(ym, 0).filter(Number.isInteger), xfmt: v => v, yfmt: v => "1e" + v, xlabel: "CG iteration", ylabel: "relative residual",
+    series: h.length ? [{ pts: h, color: css("--gpu"), label: "GPU f32, Jacobi-preconditioned CG" }] : [] });
+}
+

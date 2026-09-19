@@ -1,0 +1,1689 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Axial-flux 3D field solver — WebGPU</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#E8ECF1; --panel:#F7F9FB; --ink:#17202B; --muted:#586676; --line:#C8D0DA;
+  --gpu:#2F55C9; --good:#237A4B; --warn:#B3261E;
+  --pa:#D0453A; --pb:#2E9E5B; --pc:#3569D6;
+  --radius:6px;
+  font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-variant-numeric:tabular-nums;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#11151B; --panel:#1A2028; --ink:#E3E8EE; --muted:#93A1B2; --line:#2D3643;
+    --gpu:#86A2FF; --good:#5CC28C; --warn:#FF8A80; --pa:#FF7A6E; --pb:#5CD08F; --pc:#7FA4FF;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#11151B; --panel:#1A2028; --ink:#E3E8EE; --muted:#93A1B2; --line:#2D3643;
+  --gpu:#86A2FF; --good:#5CC28C; --warn:#FF8A80; --pa:#FF7A6E; --pb:#5CD08F; --pc:#7FA4FF;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.5}
+header{padding:28px 28px 8px;max-width:1560px;margin:0 auto}
+h1{font-family:"IBM Plex Sans Condensed","IBM Plex Sans",sans-serif;font-weight:600;font-size:clamp(26px,3.4vw,40px);line-height:1.1;margin:0 0 8px;letter-spacing:-.01em}
+.lede{margin:0;color:var(--muted);max-width:80ch}
+.layout{display:grid;grid-template-columns:270px minmax(0,1fr) 320px;gap:20px;padding:20px 28px;max-width:1560px;margin:0 auto;align-items:start}
+@media (max-width:1150px){.layout{grid-template-columns:270px minmax(0,1fr)}.results{grid-column:1/-1}}
+@media (max-width:760px){.layout{grid-template-columns:1fr;padding:16px}header{padding:20px 16px 4px}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+h2{font-size:15px;font-weight:600;margin:0 0 8px}
+h3{font-size:13px;font-weight:600;margin:14px 0 2px;color:var(--muted)}
+label{display:block;font-size:13px;color:var(--muted);margin:8px 0 2px}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pair label{margin-top:8px}
+input,select{width:100%;font:inherit;font-size:14px;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:5px 7px}
+input[type=checkbox]{width:auto}
+input[type=range]{padding:0}
+button{font:inherit;font-size:14px;border-radius:4px;border:1px solid var(--line);background:var(--bg);color:var(--ink);padding:7px 10px;cursor:pointer}
+button.primary{background:var(--gpu);border-color:var(--gpu);color:#fff;font-weight:500}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) button.primary{color:#0D1320}}
+:root[data-theme="dark"] button.primary{color:#0D1320}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--gpu);outline-offset:2px}
+.actions{display:grid;gap:8px;margin-top:14px}
+.status{font-size:13px;color:var(--muted);margin-top:12px;min-height:40px;white-space:pre-line}
+.status.err{color:var(--warn)}
+.views{display:grid;gap:16px;min-width:0}
+.view{background:#05070A;border-radius:var(--radius);overflow:hidden;position:relative}
+.view canvas{display:block;width:100%;height:auto}
+.vhead{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.vhead h2{margin:0}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.seg button{border:0;border-radius:0;font-size:13px;padding:4px 10px;background:transparent}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.zrow{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted);margin-top:8px}
+.zrow input{flex:1}
+.cbar{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-top:6px}
+.cbar canvas{flex:1;height:10px;border-radius:2px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td{padding:5px 0;border-bottom:1px solid var(--line);vertical-align:top}
+td:last-child{text-align:right;white-space:nowrap}
+tr.sub td{color:var(--muted);border-bottom-style:dotted}
+.results .panel+.panel{margin-top:16px}
+.pass{color:var(--good);font-weight:600}.fail{color:var(--warn);font-weight:600}
+.big{font-family:"IBM Plex Sans Condensed",sans-serif;font-size:30px;font-weight:600;line-height:1;margin:4px 0 2px}
+.muted{color:var(--muted)}
+.plots{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:0 28px 20px;max-width:1560px;margin:0 auto}
+@media (max-width:900px){.plots{grid-template-columns:1fr;padding:0 16px 16px}}
+.plots canvas{width:100%;height:260px;display:block}
+.notes{max-width:1560px;margin:0 auto;padding:0 28px 40px;color:var(--muted);font-size:14px}
+.notes p{max-width:82ch}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:6px;flex-wrap:wrap}
+.sw{display:inline-block;width:12px;height:3px;border-radius:1px;vertical-align:middle;margin-right:5px}
+[hidden]{display:none!important}
+.view3d{position:relative;background:#0B0F15;border-radius:var(--radius);overflow:hidden;aspect-ratio:16/11;max-height:82vh;touch-action:none}
+.view3d canvas{width:100%;height:100%;display:block;cursor:grab}
+.view3d canvas:active{cursor:grabbing}
+.empty{position:absolute;inset:0;display:grid;place-items:center;color:#9AA8B8;font-size:14px;text-align:center;padding:24px;pointer-events:none}
+.tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px 22px;margin-top:14px}
+.tgroup h3{margin:0 0 6px;color:var(--ink);font-size:14px}
+.tgroup .seg{margin:2px 0 6px}
+.chk{display:flex;gap:8px;align-items:center;color:var(--ink);margin:4px 0;font-size:14px}
+.legendrow{display:grid;gap:2px;margin-top:8px}
+.legendrow .cbar span:last-child{min-width:130px}
+.small{font-size:12px}
+textarea{width:100%;font:inherit;font-size:14px;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:5px 7px;resize:vertical}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.row2 button{font-size:13px;padding:7px 8px}
+.linkish{background:none;border:0;padding:0;color:var(--gpu);font-weight:600;text-align:left;cursor:pointer;font-size:13px}
+.linkish:hover{text-decoration:underline}
+table.lib td{vertical-align:top;padding:7px 0}
+table.lib td:nth-child(2){text-align:right;padding-right:8px}
+details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Axial-flux field solver in 3D, on the GPU</h1>
+  <p class="lede">PCB traces become line-current segments whose free-space field is summed by Biot-Savart in a compute shader. The magnetic rotor and back plate then respond through a reduced scalar potential: H = H<sub>s</sub> − ∇φ, with ∇·(μ∇φ) = ∇·(μH<sub>s</sub>), solved by conjugate gradients on a 3D grid. Torque comes from the Maxwell stress tensor on a box around the rotor.</p>
+</header>
+
+<main class="layout">
+  <aside class="panel" aria-label="Model parameters">
+    <h2>Stator PCB</h2>
+    <div class="pair">
+      <div><label for="poles">Rotor poles</label>
+        <select id="poles"><option value="4" selected>4 poles · 6 coils</option><option value="6">6 poles · 9 coils</option><option value="8">8 poles · 12 coils</option></select></div>
+      <div><label for="layers">Copper layers</label>
+        <select id="layers"><option value="2" selected>2</option><option value="4">4</option></select></div>
+    </div>
+    <div class="pair">
+      <div><label for="ri">Inner radius (mm)</label><input id="ri" type="number" value="15" step="1"></div>
+      <div><label for="ro">Outer radius (mm)</label><input id="ro" type="number" value="40" step="1"></div>
+    </div>
+    <div class="pair">
+      <div><label for="turns">Turns per layer</label><input id="turns" type="number" value="10" min="1" step="1"></div>
+      <div><label for="amps">Peak current (A)</label><input id="amps" type="number" value="5" step="0.5"></div>
+    </div>
+    <h2 style="margin-top:16px">Rotor</h2>
+    <div class="pair">
+      <div><label for="gap">Air gap (mm)</label><input id="gap" type="number" value="3" step="0.5" min="0.5"></div>
+      <div><label for="murRot">Rotor μᵣ</label><input id="murRot" type="number" value="20" step="1" min="1"></div>
+    </div>
+    <div class="pair">
+      <div><label for="tooth">Pole height (mm)</label><input id="tooth" type="number" value="3" step="0.5" min="0.5"></div>
+      <div><label for="yoke">Yoke thickness (mm)</label><input id="yoke" type="number" value="4" step="0.5" min="0.5"></div>
+    </div>
+    <label for="arc">Pole arc, fraction of pole pitch</label><input id="arc" type="number" value="0.5" step="0.05" min="0.1" max="0.95">
+    <label style="display:flex;gap:8px;align-items:center;margin-top:14px;color:var(--ink);font-weight:600"><input id="back" type="checkbox" checked> Back plate under PCB</label>
+    <div class="pair">
+      <div><label for="murBack">Back plate μᵣ</label><input id="murBack" type="number" value="20" step="1" min="1"></div>
+      <div><label for="backT">Thickness (mm)</label><input id="backT" type="number" value="4" step="0.5" min="0.5"></div>
+    </div>
+    <label for="backGap">Gap below PCB (mm)</label><input id="backGap" type="number" value="1" step="0.5" min="0">
+    <h2 style="margin-top:16px">Operating point</h2>
+    <div class="pair">
+      <div><label for="theta">Rotor angle (° mech)</label><input id="theta" type="number" value="0" step="5"></div>
+      <div><label for="gamma">Current angle γ (° elec)</label><input id="gamma" type="number" value="45" step="5"></div>
+    </div>
+    <label for="grid">Grid across diameter</label>
+    <select id="grid"><option value="96">96 cells (fast)</option><option value="128" selected>128 cells</option><option value="160">160 cells</option></select>
+    <div class="actions">
+      <button id="solve" class="primary">Solve</button>
+      <button id="sweep">Sweep current angle γ</button>
+      <button id="stop" disabled>Stop</button>
+    </div>
+    <details>
+      <summary>Validation tests</summary>
+      <div class="actions">
+        <button id="vLoop">Circular loop vs analytic axis field</button>
+        <button id="vSphere">Magnetic sphere in uniform field</button>
+      </div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">The sphere test uses the rotor μᵣ above. The analytic interior field is 3μᵣ/(μᵣ+2) · μ₀H₀.</p>
+    </details>
+    <div id="status" class="status" role="status"></div>
+  </aside>
+
+  <section class="views" aria-label="3D view">
+    <div>
+      <div class="vhead"><h2>3D view</h2><span class="muted" style="font-size:13px">Drag to orbit, shift-drag to pan, scroll to zoom, double-click to reset</span></div>
+      <div class="view3d"><canvas id="gl" aria-label="3D model with magnetic field"></canvas><div id="empty" class="empty">Press Solve. The machine and its field appear here in 3D.</div></div>
+      <div class="legendrow">
+        <div class="cbar"><span>0</span><canvas id="barB" width="256" height="1"></canvas><span id="barBmax">–</span><span class="muted">|B| in volume and field lines</span></div>
+        <div class="cbar" id="sliceLegend" hidden><span id="barSmin">–</span><canvas id="barS" width="256" height="1"></canvas><span id="barSmax">–</span><span class="muted">slice colour</span></div>
+      </div>
+      <div class="tools">
+        <div class="tgroup"><h3>Field</h3>
+          <label class="chk"><input type="checkbox" id="oVolume" checked> Volume glow of |B|</label>
+          <label class="chk"><input type="checkbox" id="oLines" checked> Field lines</label>
+          <label for="oDensity">Volume density</label><input id="oDensity" type="range" min="0" max="1.5" step="0.01" value="0.35">
+          <label for="oThr">Volume threshold</label><input id="oThr" type="range" min="0" max="0.9" step="0.01" value="0.18">
+          <div id="lineInfo" class="muted small" style="margin-top:6px"></div>
+        </div>
+        <div class="tgroup"><h3>Slice</h3>
+          <div class="seg" role="group" aria-label="Slice"><button data-slice="off" aria-pressed="true">Off</button><button data-slice="gap" aria-pressed="false">Gap plane</button><button data-slice="axial" aria-pressed="false">Axial section</button></div>
+          <div class="seg" role="group" aria-label="Slice colour"><button data-sfield="bz" aria-pressed="true">B<sub>z</sub></button><button data-sfield="bmag" aria-pressed="false">|B|</button></div>
+          <label for="sliceZ">Gap plane height, <span id="sliceZval">–</span></label><input id="sliceZ" type="range" min="-10" max="10" step="0.1" value="0">
+        </div>
+        <div class="tgroup"><h3>Geometry</h3>
+          <div class="seg" role="group" aria-label="Rotor"><button data-rotor="solid" aria-pressed="false">Rotor solid</button><button data-rotor="ghost" aria-pressed="true">Ghost</button><button data-rotor="hidden" aria-pressed="false">Hidden</button></div>
+          <label class="chk"><input type="checkbox" id="oPcb" checked> Stator PCB</label>
+          <label class="chk"><input type="checkbox" id="oBack" checked> Back plate</label>
+          <label class="chk"><input type="checkbox" id="oCut"> Cutaway at y = 0</label>
+        </div>
+      </div>
+      <div class="legend"><span><span class="sw" style="background:var(--pa)"></span>Phase A traces</span><span><span class="sw" style="background:var(--pb)"></span>Phase B</span><span><span class="sw" style="background:var(--pc)"></span>Phase C</span></div>
+    </div>
+  </section>
+
+  <aside class="results" aria-label="Results">
+    <div class="panel"><h2>Project</h2>
+      <label for="projName">Name</label><input id="projName" type="text" placeholder="Untitled motor" maxlength="80">
+      <label for="projNotes">Notes</label><textarea id="projNotes" rows="2" placeholder="What this variant is testing"></textarea>
+      <div class="row2">
+        <button id="projSaveFile" class="primary" disabled>Save project file</button>
+        <button id="projOpen">Open project file</button>
+        <button id="projSaveLib">Save in this browser</button>
+        <button id="projExport" disabled>Export 3D model</button>
+      </div>
+      <p id="dlNote" class="muted small" style="margin:8px 0 0" hidden>File saving and model export work on the published page. Saving in this browser and opening project files work here too.</p>
+      <input id="projFile" type="file" accept=".json,application/json" hidden>
+      <h3 style="margin-top:16px">Saved in this browser</h3>
+      <div id="library"></div>
+    </div>
+    <div class="panel"><h2 id="resTitle">Result</h2><div id="res" class="muted">Press Solve to compute the field for the current design.</div></div>
+    <div class="panel"><h2>Solver</h2><div id="perf" class="muted">No solve yet.</div></div>
+  </aside>
+</main>
+
+<section class="plots">
+  <div class="panel"><h2>Torque vs current angle <span class="muted" style="font-weight:400">— reluctance torque should follow sin 2γ</span></h2><canvas id="sweepPlot"></canvas></div>
+  <div class="panel"><h2 id="p2title">Convergence</h2><canvas id="p2"></canvas></div>
+</section>
+
+<section class="notes">
+  <p>The PCB is non-magnetic and carries the currents, so its field is exact free-space Biot-Savart. Traces are modelled as concentric trapezoidal loops per layer, a close stand-in for spiral coils. Per-phase fields are computed once per geometry and cached, so changing current angle or rotor position only re-runs the potential solve. Changing rotor position re-rasterizes the materials, while the traces stay put.</p>
+  <p>The reduced scalar potential is accurate for moderate permeability, which suits iron-filled filament. At steel-like μᵣ in the hundreds or thousands, H inside the material becomes a small difference of two large numbers, and f32 loses it. The sphere test at μᵣ = 2000 shows this directly. The standard fix is the two-potential method, which uses the total potential inside iron.</p>
+  <p>Project files are plain JSON with units in every field name. They hold the design parameters, view settings and a summary of the last solve, but not the field itself; opening one re-solves, which reproduces the result. The model export is a zip with an OBJ of every part, printable STLs, and an SVG of the copper pattern.</p>
+  <p>The 3D view draws the machine from its analytic geometry (smooth arcs, trace ribbons), not the solver grid. The field is uploaded as a filtered 3D texture and ray-marched on the GPU; field lines are streamlines of B traced through that same field. The outer box is held at φ = 0, with a margin around the machine. Torque is integrated on two box surfaces whose bottom faces sit at different heights in the air gap. Close agreement between the two estimates is a useful check on grid resolution.</p>
+</section>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const MU0 = 4e-7 * Math.PI;
+const state = { gpu: null, busy: false, stop: false, sol: null, sweep: null, zi: 0, field: "bz" };
+
+/* ================= Geometry ================= */
+function readP() {
+  const v = id => +$("#" + id).value;
+  const p = {
+    poles: v("poles"), layers: v("layers"), ri: v("ri"), ro: v("ro"), turns: Math.max(1, Math.round(v("turns"))), amps: v("amps"),
+    gap: Math.max(0.3, v("gap")), murRot: Math.max(1, v("murRot")), tooth: Math.max(0.3, v("tooth")), yoke: Math.max(0.3, v("yoke")),
+    arc: Math.min(0.95, Math.max(0.1, v("arc"))), back: $("#back").checked, murBack: Math.max(1, v("murBack")),
+    backT: Math.max(0.3, v("backT")), backGap: Math.max(0, v("backGap")), theta: v("theta"), gamma: v("gamma"), grid: v("grid")
+  };
+  if (!(p.ro > p.ri + 4)) throw new Error("Outer radius must exceed inner radius by at least 4 mm.");
+  return p;
+}
+const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+
+function coilPolys(p) {
+  const Nc = 1.5 * p.poles, half = Math.PI / Nc, pitch = 0.5, edge = 0.4, nArc = 10, polys = [];
+  for (let k = 0; k < Nc; k++) {
+    const th = k * 2 * Math.PI / Nc, ph = k % 3;
+    for (let j = 0; j < p.turns; j++) {
+      const d = edge + j * pitch, ri = p.ri + d, ro = p.ro - d;
+      const ai = half - d / ri, ao = half - d / ro;
+      if (ro - ri < 1 || ai < 0.02) break;
+      const pts = [[ri * Math.cos(th - ai), ri * Math.sin(th - ai)]];
+      for (let s = 0; s <= nArc; s++) { const a = th - ao + 2 * ao * s / nArc; pts.push([ro * Math.cos(a), ro * Math.sin(a)]); }
+      for (let s = 0; s <= nArc; s++) { const a = th + ai - 2 * ai * s / nArc; pts.push([ri * Math.cos(a), ri * Math.sin(a)]); }
+      polys.push({ pts, ph });
+    }
+  }
+  return polys;
+}
+function segsFromPolys(polys, zs) {
+  const out = [];
+  for (const z of zs) for (const { pts, ph } of polys) for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-6) continue;
+    out.push(a[0] * 1e-3, a[1] * 1e-3, z * 1e-3, ph, b[0] * 1e-3, b[1] * 1e-3, z * 1e-3, 0);
+  }
+  return new Float32Array(out);
+}
+
+function motorGeom(p) {
+  const pcbHalf = 0.8, zTB = pcbHalf + p.gap, zTT = zTB + p.tooth, zYT = zTT + p.yoke;
+  const zBT = -pcbHalf - p.backGap, zBB = zBT - p.backT;
+  return { pcbHalf, zTB, zTT, zYT, zBT, zBB, Rri: Math.max(1, p.ri - 1), Rro: p.ro + 1 };
+}
+function buildMotor(p) {
+  const zLay = p.layers === 2 ? [-0.7, 0.7] : [-0.7, -0.233, 0.233, 0.7];
+  const { pcbHalf, zTB, zTT, zYT, zBT, zBB, Rri, Rro } = motorGeom(p);
+  const margin = Math.max(12, 0.4 * p.ro), L = Rro + margin;
+  const zmin = (p.back ? zBB : -pcbHalf) - margin, zmax = zYT + margin;
+  const nx = p.grid, ny = nx, hm = 2 * L / nx, nz = Math.ceil((zmax - zmin) / hm);
+  const x0 = -L, y0 = -L, z0 = zmin, N = nx * ny * nz;
+  const mu = new Float32Array(N).fill(1);
+  const m = 2 * Math.PI / p.poles, halfArc = p.arc * m / 2, th0 = p.theta * Math.PI / 180, S = 4;
+  for (let iz = 0; iz < nz; iz++) {
+    const za = z0 + iz * hm, zb = za + hm;
+    const ft = overlap(za, zb, zTB, zTT) / hm, fy = overlap(za, zb, zTT, zYT) / hm, fb = p.back ? overlap(za, zb, zBB, zBT) / hm : 0;
+    if (!ft && !fy && !fb) continue;
+    for (let iy = 0; iy < ny; iy++) for (let ix = 0; ix < nx; ix++) {
+      const cx = x0 + (ix + .5) * hm, cy = y0 + (iy + .5) * hm, rc = Math.hypot(cx, cy);
+      if (rc > Rro + hm || rc < Rri - hm) continue;
+      let nA = 0, nT = 0;
+      for (let a = 0; a < S; a++) for (let b = 0; b < S; b++) {
+        const sx = x0 + (ix + (a + .5) / S) * hm, sy = y0 + (iy + (b + .5) / S) * hm, r = Math.hypot(sx, sy);
+        if (r < Rri || r > Rro) continue;
+        nA++;
+        if (ft) { let d = Math.atan2(sy, sx) - th0; d = ((d % m) + m + m / 2) % m - m / 2; if (Math.abs(d) < halfArc) nT++; }
+      }
+      const fr = ft * nT / (S * S) + fy * nA / (S * S), fbk = fb * nA / (S * S);
+      if (fr + fbk > 0) mu[(iz * ny + iy) * nx + ix] = 1 / ((1 - fr - fbk) + fr / p.murRot + fbk / p.murBack);
+    }
+  }
+  const polys = coilPolys(p);
+  const segs = segsFromPolys(polys, zLay);
+  const segKey = JSON.stringify([nx, ny, nz, hm, z0, p.poles, p.ri, p.ro, p.turns, p.layers]);
+  return { kind: "motor", p, nx, ny, nz, hm, x0, y0, z0, mu, polys, segs, segKey, zLay,
+           g: { zTB, zTT, zYT, zBT, zBB, Rri, Rro, pcbHalf } };
+}
+function cubeJob(kind, p) {
+  const n = Math.min(p.grid, 128), L = 40, hm = 2 * L / n;
+  return { kind, p, nx: n, ny: n, nz: n, hm, x0: -L, y0: -L, z0: -L, mu: new Float32Array(n * n * n).fill(1) };
+}
+function buildSphere(p) {
+  const j = cubeJob("sphere", p), { nx, hm, x0 } = j, a = 10, S = 4;
+  for (let iz = 0; iz < nx; iz++) for (let iy = 0; iy < nx; iy++) for (let ix = 0; ix < nx; ix++) {
+    const c = [ix, iy, iz].map(i => x0 + (i + .5) * hm), rc = Math.hypot(...c);
+    let f;
+    if (rc < a - hm) f = 1; else if (rc > a + hm) f = 0;
+    else { let n = 0; for (let u = 0; u < S; u++) for (let v = 0; v < S; v++) for (let w = 0; w < S; w++)
+      if (Math.hypot(x0 + (ix + (u + .5) / S) * hm, x0 + (iy + (v + .5) / S) * hm, x0 + (iz + (w + .5) / S) * hm) < a) n++;
+      f = n / (S * S * S); }
+    if (f > 0) j.mu[(iz * nx + iy) * nx + ix] = 1 / ((1 - f) + f / p.murRot);
+  }
+  j.a = a; j.H0 = 1000;
+  return j;
+}
+function buildLoop(p) {
+  const j = cubeJob("loop", p), R = 15, ns = 128, pts = [];
+  for (let i = 0; i < ns; i++) { const t = 2 * Math.PI * i / ns; pts.push([R * Math.cos(t), R * Math.sin(t)]); }
+  j.polys = [{ pts, ph: 0 }]; j.segs = segsFromPolys(j.polys, [0]); j.R = R;
+  j.segKey = JSON.stringify(["loop", j.nx, j.hm]); j.zLay = [0];
+  return j;
+}
+function coefs(job) {
+  const { nx, ny, nz, mu } = job, N = nx * ny * nz, sy = nx, sz = nx * ny;
+  const cX = new Float32Array(N), cY = new Float32Array(N), cZ = new Float32Array(N), diag = new Float32Array(N);
+  const hm = (a, b) => 2 * a * b / (a + b);
+  for (let iz = 0; iz < nz; iz++) for (let iy = 0; iy < ny; iy++) for (let ix = 0; ix < nx; ix++) {
+    const k = (iz * ny + iy) * nx + ix;
+    if (ix < nx - 1) cX[k] = hm(mu[k], mu[k + 1]);
+    if (iy < ny - 1) cY[k] = hm(mu[k], mu[k + sy]);
+    if (iz < nz - 1) cZ[k] = hm(mu[k], mu[k + sz]);
+  }
+  for (let iz = 1; iz < nz - 1; iz++) for (let iy = 1; iy < ny - 1; iy++) for (let ix = 1; ix < nx - 1; ix++) {
+    const k = (iz * ny + iy) * nx + ix;
+    diag[k] = cX[k] + cX[k - 1] + cY[k] + cY[k - sy] + cZ[k] + cZ[k - sz];
+  }
+  return { cX, cY, cZ, diag };
+}
+
+/* ================= WGSL ================= */
+const WP = `struct Params { nx:u32, ny:u32, nz:u32, count:u32, nParts:u32, sy:u32, sz:u32, h:f32 };
+@group(0) @binding(0) var<uniform> P: Params;`;
+const RED = `
+  sA[l] = a; sB[l] = c; workgroupBarrier();
+  for (var s = 128u; s > 0u; s = s >> 1u) { if (l < s) { sA[l] += sA[l + s]; sB[l] += sB[l + s]; } workgroupBarrier(); }
+  if (l == 0u) { partA[w.x] = sA[0]; partB[w.x] = sB[0]; }`;
+const BI = `@builtin(global_invocation_id) gi: vec3u, @builtin(local_invocation_index) l: u32, @builtin(workgroup_id) w: vec3u`;
+
+const SH = {};
+SH.init = `${WP}
+@group(0) @binding(1) var<storage, read> diag: array<f32>;
+@group(0) @binding(2) var<storage, read> b: array<f32>;
+@group(0) @binding(3) var<storage, read_write> x: array<f32>;
+@group(0) @binding(4) var<storage, read_write> r: array<f32>;
+@group(0) @binding(5) var<storage, read_write> p: array<f32>;
+@group(0) @binding(6) var<storage, read_write> partA: array<f32>;
+@group(0) @binding(7) var<storage, read_write> partB: array<f32>;
+var<workgroup> sA: array<f32, 256>; var<workgroup> sB: array<f32, 256>;
+@compute @workgroup_size(256)
+fn main(${BI}) {
+  let i = gi.x; var a = 0.0; var c = 0.0;
+  if (i < P.count) {
+    let d = diag[i]; x[i] = 0.0;
+    if (d > 0.0) { let ri = b[i]; r[i] = ri; let z = ri / d; p[i] = z; a = ri * z; c = ri * ri; }
+    else { r[i] = 0.0; p[i] = 0.0; }
+  }${RED}
+}`;
+SH.matvec = `${WP}
+@group(0) @binding(1) var<storage, read> cX: array<f32>;
+@group(0) @binding(2) var<storage, read> cY: array<f32>;
+@group(0) @binding(3) var<storage, read> cZ: array<f32>;
+@group(0) @binding(4) var<storage, read> diag: array<f32>;
+@group(0) @binding(5) var<storage, read> p: array<f32>;
+@group(0) @binding(6) var<storage, read_write> Ap: array<f32>;
+@group(0) @binding(7) var<storage, read_write> partA: array<f32>;
+var<workgroup> sA: array<f32, 256>;
+@compute @workgroup_size(256)
+fn main(${BI}) {
+  let i = gi.x; var a = 0.0;
+  if (i < P.count) {
+    let d = diag[i];
+    if (d > 0.0) {
+      let sy = P.sy; let sz = P.sz;
+      let v = d * p[i] - cX[i] * p[i + 1u] - cX[i - 1u] * p[i - 1u]
+                       - cY[i] * p[i + sy] - cY[i - sy] * p[i - sy]
+                       - cZ[i] * p[i + sz] - cZ[i - sz] * p[i - sz];
+      Ap[i] = v; a = p[i] * v;
+    } else { Ap[i] = 0.0; }
+  }
+  sA[l] = a; workgroupBarrier();
+  for (var s = 128u; s > 0u; s = s >> 1u) { if (l < s) { sA[l] += sA[l + s]; } workgroupBarrier(); }
+  if (l == 0u) { partA[w.x] = sA[0]; }
+}`;
+SH.reduce = `${WP}
+override MODE: u32 = 0u;
+@group(0) @binding(1) var<storage, read> partA: array<f32>;
+@group(0) @binding(2) var<storage, read> partB: array<f32>;
+@group(0) @binding(3) var<storage, read_write> scal: array<f32>;
+var<workgroup> sA: array<f32, 256>; var<workgroup> sB: array<f32, 256>;
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_index) l: u32) {
+  var a = 0.0; var c = 0.0;
+  for (var k = l; k < P.nParts; k = k + 256u) { a += partA[k]; c += partB[k]; }
+  sA[l] = a; sB[l] = c; workgroupBarrier();
+  for (var s = 128u; s > 0u; s = s >> 1u) { if (l < s) { sA[l] += sA[l + s]; sB[l] += sB[l + s]; } workgroupBarrier(); }
+  if (l == 0u) {
+    let A = sA[0]; let C = sB[0];
+    if (MODE == 0u) { scal[0] = A; scal[4] = C; scal[5] = C; scal[6] = 0.0; }
+    else if (MODE == 1u) { scal[1] = A; let al = scal[0] / A; scal[2] = select(0.0, al, A > 0.0 && abs(al) < 3.0e38); }
+    else { let rz = scal[0]; let be = A / rz; scal[3] = select(0.0, be, rz > 0.0 && abs(be) < 3.0e38); scal[0] = A; scal[4] = C; scal[6] = scal[6] + 1.0; }
+  }
+}`;
+SH.update = `${WP}
+@group(0) @binding(1) var<storage, read> diag: array<f32>;
+@group(0) @binding(2) var<storage, read_write> x: array<f32>;
+@group(0) @binding(3) var<storage, read_write> r: array<f32>;
+@group(0) @binding(4) var<storage, read> p: array<f32>;
+@group(0) @binding(5) var<storage, read> Ap: array<f32>;
+@group(0) @binding(6) var<storage, read_write> partA: array<f32>;
+@group(0) @binding(7) var<storage, read_write> partB: array<f32>;
+@group(0) @binding(8) var<storage, read> scal: array<f32>;
+var<workgroup> sA: array<f32, 256>; var<workgroup> sB: array<f32, 256>;
+@compute @workgroup_size(256)
+fn main(${BI}) {
+  let i = gi.x; var a = 0.0; var c = 0.0; let al = scal[2];
+  if (i < P.count) {
+    let d = diag[i];
+    if (d > 0.0) { x[i] = x[i] + al * p[i]; let ri = r[i] - al * Ap[i]; r[i] = ri; a = ri * ri / d; c = ri * ri; }
+  }${RED}
+}`;
+SH.pupdate = `${WP}
+@group(0) @binding(1) var<storage, read> diag: array<f32>;
+@group(0) @binding(2) var<storage, read> r: array<f32>;
+@group(0) @binding(3) var<storage, read_write> p: array<f32>;
+@group(0) @binding(4) var<storage, read> scal: array<f32>;
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gi: vec3u) {
+  let i = gi.x;
+  if (i < P.count) { let d = diag[i]; if (d > 0.0) { p[i] = r[i] / d + scal[3] * p[i]; } }
+}`;
+SH.bs = `struct BSP { count:u32, nx:u32, ny:u32, segStart:u32, segEnd:u32, p0:u32, p1:u32, p2:u32, origin:vec4f, misc:vec4f };
+struct Seg { a: vec4f, b: vec4f };
+@group(0) @binding(0) var<uniform> Q: BSP;
+@group(0) @binding(1) var<storage, read> segs: array<Seg>;
+@group(0) @binding(2) var<storage, read_write> H: array<f32>;
+var<workgroup> tile: array<Seg, 64>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gi: vec3u, @builtin(local_invocation_index) l: u32) {
+  let i = gi.x;
+  let ix = i % Q.nx; let iy = (i / Q.nx) % Q.ny; let iz = i / (Q.nx * Q.ny);
+  let pos = Q.origin.xyz + (vec3f(f32(ix), f32(iy), f32(iz)) + vec3f(0.5)) * Q.origin.w;
+  let eps2 = Q.misc.x;
+  var hA = vec3f(0.0); var hB = vec3f(0.0); var hC = vec3f(0.0);
+  for (var base = Q.segStart; base < Q.segEnd; base = base + 64u) {
+    let j = base + l;
+    if (j < Q.segEnd) { tile[l] = segs[j]; }
+    workgroupBarrier();
+    let cnt = min(64u, Q.segEnd - base);
+    for (var t = 0u; t < cnt; t = t + 1u) {
+      let s = tile[t];
+      let d = s.b.xyz - s.a.xyz; let r1 = pos - s.a.xyz; let r2 = pos - s.b.xyz;
+      let L1 = max(length(r1), 1e-9); let L2 = max(length(r2), 1e-9);
+      let c = cross(r1, r2);
+      let f = (dot(d, r1) / L1 - dot(d, r2) / L2) / (dot(c, c) + eps2 * dot(d, d)) * 0.0795774715459;
+      let dh = c * f;
+      let ph = u32(s.a.w + 0.5);
+      if (ph == 0u) { hA += dh; } else if (ph == 1u) { hB += dh; } else { hC += dh; }
+    }
+    workgroupBarrier();
+  }
+  if (i < Q.count) {
+    let o = 9u * i;
+    H[o] += hA.x; H[o + 1u] += hA.y; H[o + 2u] += hA.z;
+    H[o + 3u] += hB.x; H[o + 4u] += hB.y; H[o + 5u] += hB.z;
+    H[o + 6u] += hC.x; H[o + 7u] += hC.y; H[o + 8u] += hC.z;
+  }
+}`;
+SH.combine = `${WP}
+@group(0) @binding(1) var<uniform> I: vec4f;
+@group(0) @binding(2) var<storage, read> H: array<f32>;
+@group(0) @binding(3) var<storage, read_write> Hs: array<f32>;
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gi: vec3u) {
+  let i = gi.x;
+  if (i < P.count) {
+    let o = 9u * i;
+    for (var c = 0u; c < 3u; c = c + 1u) { Hs[3u * i + c] = I.x * H[o + c] + I.y * H[o + 3u + c] + I.z * H[o + 6u + c]; }
+  }
+}`;
+SH.rhs = `${WP}
+@group(0) @binding(1) var<storage, read> cX: array<f32>;
+@group(0) @binding(2) var<storage, read> cY: array<f32>;
+@group(0) @binding(3) var<storage, read> cZ: array<f32>;
+@group(0) @binding(4) var<storage, read> diag: array<f32>;
+@group(0) @binding(5) var<storage, read> Hs: array<f32>;
+@group(0) @binding(6) var<storage, read_write> b: array<f32>;
+fn hs(k: u32, c: u32) -> f32 { return Hs[3u * k + c]; }
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gi: vec3u) {
+  let i = gi.x;
+  if (i < P.count) {
+    if (diag[i] > 0.0) {
+      let sy = P.sy; let sz = P.sz;
+      let s = (cX[i] - 1.0) * 0.5 * (hs(i, 0u) + hs(i + 1u, 0u)) - (cX[i - 1u] - 1.0) * 0.5 * (hs(i, 0u) + hs(i - 1u, 0u))
+            + (cY[i] - 1.0) * 0.5 * (hs(i, 1u) + hs(i + sy, 1u)) - (cY[i - sy] - 1.0) * 0.5 * (hs(i, 1u) + hs(i - sy, 1u))
+            + (cZ[i] - 1.0) * 0.5 * (hs(i, 2u) + hs(i + sz, 2u)) - (cZ[i - sz] - 1.0) * 0.5 * (hs(i, 2u) + hs(i - sz, 2u));
+      b[i] = -P.h * s;
+    } else { b[i] = 0.0; }
+  }
+}`;
+
+/* ================= GPU plumbing ================= */
+async function initGPU() {
+  if (state.gpu) return state.gpu;
+  if (!navigator.gpu) throw new Error("WebGPU isn't available in this browser. Use a recent Chrome or Edge, or Safari 26+.");
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+  if (!adapter) throw new Error("No WebGPU adapter was found on this device.");
+  const L = adapter.limits;
+  const device = await adapter.requestDevice({ requiredLimits: {
+    maxStorageBufferBindingSize: L.maxStorageBufferBindingSize, maxBufferSize: L.maxBufferSize } });
+  device.lost.then(i => { state.gpu = null; setStatus("The GPU device was lost (" + i.message + "). Try a smaller grid, then solve again.", true); });
+  const mk = (code, constants) => device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code }), entryPoint: "main", constants } });
+  const info = adapter.info || {};
+  state.gpu = {
+    device, limits: device.limits,
+    name: [info.vendor, info.architecture, info.device].filter(Boolean).join(" ") || "WebGPU adapter",
+    pl: { init: mk(SH.init), matvec: mk(SH.matvec), update: mk(SH.update), pupdate: mk(SH.pupdate),
+          red0: mk(SH.reduce, { MODE: 0 }), red1: mk(SH.reduce, { MODE: 1 }), red2: mk(SH.reduce, { MODE: 2 }),
+          bs: mk(SH.bs), combine: mk(SH.combine), rhs: mk(SH.rhs) },
+    buf: null
+  };
+  return state.gpu;
+}
+function ensureBuffers(G, job) {
+  const key = `${job.nx}x${job.ny}x${job.nz}`;
+  if (G.buf && G.buf.key === key) return G.buf;
+  if (G.buf) for (const b of Object.values(G.buf)) if (b && b.destroy) b.destroy();
+  const d = G.device, N = job.nx * job.ny * job.nz, parts = Math.ceil(N / 256);
+  if (9 * N * 4 > G.limits.maxStorageBufferBindingSize) throw new Error("This grid needs more GPU buffer space than this device allows. Choose a smaller grid.");
+  const ST = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
+  const mk = (size, usage = ST) => d.createBuffer({ size: Math.max(32, size), usage });
+  const U = GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, R = GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST;
+  const B = { key, N, parts,
+    params: mk(32, U), cur: mk(16, U), bsp: mk(64, U),
+    cX: mk(N * 4), cY: mk(N * 4), cZ: mk(N * 4), diag: mk(N * 4), b: mk(N * 4),
+    x: mk(N * 4), r: mk(N * 4), p: mk(N * 4), Ap: mk(N * 4),
+    partA: mk(parts * 4), partB: mk(parts * 4), scal: mk(32),
+    H: mk(9 * N * 4), Hs: mk(3 * N * 4),
+    readScal: mk(32, R), readX: mk(N * 4, R), readHs: mk(3 * N * 4, R), segBuf: null, segKey: null };
+  const ab = new ArrayBuffer(32), u = new Uint32Array(ab), f = new Float32Array(ab);
+  u.set([job.nx, job.ny, job.nz, N, parts, job.nx, job.nx * job.ny]); f[7] = job.hm * 1e-3;
+  d.queue.writeBuffer(B.params, 0, ab);
+  const bg = (pl, list) => d.createBindGroup({ layout: pl.getBindGroupLayout(0), entries: list.map((b, i) => ({ binding: i, resource: { buffer: b } })) });
+  const P = G.pl;
+  B.bg = {
+    init: bg(P.init, [B.params, B.diag, B.b, B.x, B.r, B.p, B.partA, B.partB]),
+    matvec: bg(P.matvec, [B.params, B.cX, B.cY, B.cZ, B.diag, B.p, B.Ap, B.partA]),
+    update: bg(P.update, [B.params, B.diag, B.x, B.r, B.p, B.Ap, B.partA, B.partB, B.scal]),
+    pupdate: bg(P.pupdate, [B.params, B.diag, B.r, B.p, B.scal]),
+    red0: bg(P.red0, [B.params, B.partA, B.partB, B.scal]),
+    red1: bg(P.red1, [B.params, B.partA, B.partB, B.scal]),
+    red2: bg(P.red2, [B.params, B.partA, B.partB, B.scal]),
+    combine: bg(P.combine, [B.params, B.cur, B.H, B.Hs]),
+    rhs: bg(P.rhs, [B.params, B.cX, B.cY, B.cZ, B.diag, B.Hs, B.b])
+  };
+  G.buf = B;
+  return B;
+}
+function dispatch(G, B, list) {
+  const enc = G.device.createCommandEncoder(), pass = enc.beginComputePass();
+  for (const [name, n] of list) { pass.setPipeline(G.pl[name]); pass.setBindGroup(0, B.bg[name]); pass.dispatchWorkgroups(n); }
+  pass.end(); return enc;
+}
+async function runBiotSavart(G, B, job, onProg) {
+  const d = G.device, N = B.N, segs = job.segs, ns = segs.length / 8;
+  if (B.segBuf) B.segBuf.destroy();
+  B.segBuf = d.createBuffer({ size: Math.max(32, segs.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  d.queue.writeBuffer(B.segBuf, 0, segs);
+  B.bg.bs = d.createBindGroup({ layout: G.pl.bs.getBindGroupLayout(0), entries: [B.bsp, B.segBuf, B.H].map((b, i) => ({ binding: i, resource: { buffer: b } })) });
+  let enc = d.createCommandEncoder(); enc.clearBuffer(B.H); d.queue.submit([enc.finish()]);
+  const chunk = Math.max(64, Math.floor(1.2e8 / N / 64) * 64);
+  const ab = new ArrayBuffer(64), u = new Uint32Array(ab), f = new Float32Array(ab);
+  const h = job.hm * 1e-3, eps = Math.max(0.25e-3, 0.5 * h);
+  for (let s = 0; s < ns; s += chunk) {
+    u.set([N, job.nx, job.ny, s, Math.min(ns, s + chunk), 0, 0, 0]);
+    f.set([job.x0 * 1e-3, job.y0 * 1e-3, job.z0 * 1e-3, h, eps * eps, 0, 0, 0], 8);
+    d.queue.writeBuffer(B.bsp, 0, ab);
+    enc = d.createCommandEncoder(); const pass = enc.beginComputePass();
+    pass.setPipeline(G.pl.bs); pass.setBindGroup(0, B.bg.bs); pass.dispatchWorkgroups(Math.ceil(N / 64)); pass.end();
+    d.queue.submit([enc.finish()]);
+    await d.queue.onSubmittedWorkDone();
+    onProg && onProg(Math.min(ns, s + chunk), ns);
+    if (state.stop) throw new Error("Stopped.");
+  }
+  B.segKey = job.segKey;
+}
+async function runPCG(G, B, tol, maxIt, onProg) {
+  const d = G.device, g = B.parts;
+  d.queue.submit([dispatch(G, B, [["rhs", g], ["init", g], ["red0", 1]]).finish()]);
+  await d.queue.onSubmittedWorkDone();
+  const t0 = performance.now(), batch = 32, hist = [[0, 1]];
+  let it = 0, rel = 1, best = Infinity, stall = 0;
+  const one = [["matvec", g], ["red1", 1], ["update", g], ["red2", 1], ["pupdate", g]];
+  const seq = []; for (let k = 0; k < batch; k++) seq.push(...one);
+  while (it < maxIt) {
+    const enc = dispatch(G, B, seq);
+    enc.copyBufferToBuffer(B.scal, 0, B.readScal, 0, 32);
+    d.queue.submit([enc.finish()]);
+    await B.readScal.mapAsync(GPUMapMode.READ);
+    const s = new Float32Array(B.readScal.getMappedRange().slice(0)); B.readScal.unmap();
+    it += batch; rel = Math.sqrt(Math.max(s[4], 0) / s[5]);
+    hist.push([it, rel]); onProg && onProg(it, rel);
+    if (!isFinite(rel) || rel < tol || state.stop) break;
+    if (rel < best * 0.95) { best = rel; stall = 0; } else if (++stall >= 6) break;
+  }
+  return { iters: it, rel, ms: performance.now() - t0, hist };
+}
+async function readBack(G, B, withPhi) {
+  const d = G.device, N = B.N, enc = d.createCommandEncoder();
+  enc.copyBufferToBuffer(B.Hs, 0, B.readHs, 0, 3 * N * 4);
+  if (withPhi) enc.copyBufferToBuffer(B.x, 0, B.readX, 0, N * 4);
+  d.queue.submit([enc.finish()]);
+  await B.readHs.mapAsync(GPUMapMode.READ);
+  const Hs = new Float32Array(B.readHs.getMappedRange().slice(0)); B.readHs.unmap();
+  let phi = new Float32Array(N);
+  if (withPhi) { await B.readX.mapAsync(GPUMapMode.READ); phi = new Float32Array(B.readX.getMappedRange().slice(0)); B.readX.unmap(); }
+  return { Hs, phi };
+}
+
+/* ================= Solve orchestration ================= */
+function phaseCurrents(p) {
+  const phi = ((p.poles / 2) * p.theta + p.gamma) * Math.PI / 180;
+  return [p.amps * Math.cos(phi), p.amps * Math.cos(phi - 2 * Math.PI / 3), p.amps * Math.cos(phi - 4 * Math.PI / 3)];
+}
+async function solveJob(job, opts = {}) {
+  const G = await initGPU(), B = ensureBuffers(G, job), d = G.device, t = {};
+  let t0 = performance.now();
+  if (job.segs) {
+    if (B.segKey !== job.segKey) {
+      await runBiotSavart(G, B, job, (s, n) => setStatus(`Biot-Savart: ${s} of ${n} trace segments summed over ${B.N.toLocaleString()} cells…`));
+      t.bs = performance.now() - t0; t.bsCached = false;
+    } else { t.bs = 0; t.bsCached = true; }
+  }
+  t0 = performance.now();
+  const c = coefs(job);
+  d.queue.writeBuffer(B.cX, 0, c.cX); d.queue.writeBuffer(B.cY, 0, c.cY); d.queue.writeBuffer(B.cZ, 0, c.cZ); d.queue.writeBuffer(B.diag, 0, c.diag);
+  if (opts.uniformH) {
+    const Hs = new Float32Array(3 * B.N); for (let k = 0; k < B.N; k++) Hs[3 * k + 2] = opts.uniformH;
+    d.queue.writeBuffer(B.Hs, 0, Hs);
+  } else {
+    const I = opts.currents || [1, 0, 0];
+    d.queue.writeBuffer(B.cur, 0, new Float32Array([I[0], I[1], I[2], 0]));
+    d.queue.submit([dispatch(G, B, [["combine", B.parts]]).finish()]);
+  }
+  t.setup = performance.now() - t0;
+  let pcg = null;
+  if (!opts.skipPCG) pcg = await runPCG(G, B, 1e-5, 4000, (it, r) => setStatus(`Potential solve: iteration ${it}, residual ${r.toExponential(2)}`));
+  t0 = performance.now();
+  const { Hs, phi } = await readBack(G, B, !opts.skipPCG);
+  const F = fieldB(job, Hs, phi);
+  t.post = performance.now() - t0;
+  return { job, ...F, Hs, phi, pcg, t, N: B.N, nseg: job.segs ? job.segs.length / 8 : 0 };
+}
+function fieldB(job, Hs, phi) {
+  // Flux-conservative reconstruction: B on each face is mu_face (Hs - dphi/dn), exactly the flux the solver balanced.
+  // Cell-centre B is the average of its two faces in each direction, so normal B stays continuous across material edges.
+  const { nx, ny, nz, mu } = job, h = job.hm * 1e-3, N = nx * ny * nz, sy = nx, sz = nx * ny;
+  const Bx = new Float32Array(N), By = new Float32Array(N), Bz = new Float32Array(N);
+  const fl = (k, s, c) => { const a = mu[k], b = mu[k + s];
+    return MU0 * (2 * a * b / (a + b)) * (0.5 * (Hs[3 * k + c] + Hs[3 * (k + s) + c]) - (phi[k + s] - phi[k]) / h); };
+  for (let iz = 1; iz < nz - 1; iz++) for (let iy = 1; iy < ny - 1; iy++) for (let ix = 1; ix < nx - 1; ix++) {
+    const k = (iz * ny + iy) * nx + ix;
+    Bx[k] = 0.5 * (fl(k, 1, 0) + fl(k - 1, 1, 0));
+    By[k] = 0.5 * (fl(k, sy, 1) + fl(k - sy, sy, 1));
+    Bz[k] = 0.5 * (fl(k, sz, 2) + fl(k - sz, sz, 2));
+  }
+  return { Bx, By, Bz };
+}
+
+/* ================= Torque and metrics ================= */
+function torque(sol, kb) {
+  const { job, Bx, By, Bz } = sol, { nx, ny, nz, x0, y0, z0 } = job, hm = job.hm, h = hm * 1e-3, sy = nx, sz = nx * ny, dA = h * h;
+  const Rb = job.g.Rro + 2, ia = Math.max(1, Math.floor((-Rb - x0) / hm)), ib = Math.min(nx - 1, Math.ceil((Rb - x0) / hm));
+  const ja = Math.max(1, Math.floor((-Rb - y0) / hm)), jb = Math.min(ny - 1, Math.ceil((Rb - y0) / hm));
+  const kt = Math.min(nz - 2, Math.ceil((job.g.zYT - z0) / hm) + 2);
+  const idx = (ix, iy, iz) => (iz * ny + iy) * nx + ix;
+  const avg = (k1, k2) => [(Bx[k1] + Bx[k2]) / 2, (By[k1] + By[k2]) / 2, (Bz[k1] + Bz[k2]) / 2];
+  const X = ix => (x0 + ix * hm) * 1e-3, Xc = ix => (x0 + (ix + .5) * hm) * 1e-3, Y = iy => (y0 + iy * hm) * 1e-3, Yc = iy => (y0 + (iy + .5) * hm) * 1e-3;
+  let T = 0;
+  for (let iy = ja; iy < jb; iy++) for (let ix = ia; ix < ib; ix++) {
+    let [bx, by, bz] = avg(idx(ix, iy, kb - 1), idx(ix, iy, kb));
+    T += (Xc(ix) * (-by * bz) - Yc(iy) * (-bx * bz)) * dA;
+    [bx, by, bz] = avg(idx(ix, iy, kt - 1), idx(ix, iy, kt));
+    T += (Xc(ix) * (by * bz) - Yc(iy) * (bx * bz)) * dA;
+  }
+  for (let iz = kb; iz < kt; iz++) {
+    for (let iy = ja; iy < jb; iy++) for (const [ixp, s] of [[ia, -1], [ib, 1]]) {
+      const [bx, by, bz] = avg(idx(ixp - 1, iy, iz), idx(ixp, iy, iz)), B2 = bx * bx + by * by + bz * bz;
+      const fx = s * (bx * bx - B2 / 2), fy = s * bx * by;
+      T += (X(ixp) * fy - Yc(iy) * fx) * dA;
+    }
+    for (let ix = ia; ix < ib; ix++) for (const [iyp, s] of [[ja, -1], [jb, 1]]) {
+      const [bx, by, bz] = avg(idx(ix, iyp - 1, iz), idx(ix, iyp, iz)), B2 = bx * bx + by * by + bz * bz;
+      const fx = s * bx * by, fy = s * (by * by - B2 / 2);
+      T += (Xc(ix) * fy - Y(iyp) * fx) * dA;
+    }
+  }
+  return T / MU0;
+}
+function motorMetrics(sol) {
+  const { job } = sol, { hm, z0, g } = job, top = Math.max(...job.zLay);
+  const cands = [];
+  for (let kb = 1; kb < job.nz - 1; kb++) { const zp = z0 + kb * hm; if (zp - 0.5 * hm > top && zp + 0.5 * hm < g.zTB) cands.push(kb); }
+  const zmid = (top + g.zTB) / 2;
+  cands.sort((a, b) => Math.abs(z0 + a * hm - zmid) - Math.abs(z0 + b * hm - zmid));
+  const m = { planes: cands.slice(0, 2).sort((a, b) => a - b) };
+  m.T = m.planes.map(kb => torque(sol, kb));
+  const { nx, ny } = job, kg = Math.min(job.nz - 1, Math.max(0, Math.floor((zmid - z0) / hm)));
+  let s = 0, n = 0, bmaxRot = 0;
+  for (let iy = 0; iy < ny; iy++) for (let ix = 0; ix < nx; ix++) {
+    const r = Math.hypot(job.x0 + (ix + .5) * hm, job.y0 + (iy + .5) * hm);
+    if (r > job.p.ri && r < job.p.ro) { s += Math.abs(sol.Bz[(kg * ny + iy) * nx + ix]); n++; }
+  }
+  m.gapBz = s / n;
+  for (let k = 0; k < job.mu.length; k++) if (job.mu[k] > 1.5) bmaxRot = Math.max(bmaxRot, Math.hypot(sol.Bx[k], sol.By[k], sol.Bz[k]));
+  m.bmaxMat = bmaxRot; m.kg = kg;
+  return m;
+}
+function interpCentre(A, job, iz) {
+  const { nx, ny } = job, i = nx / 2, j = ny / 2;
+  return (A[(iz * ny + j - 1) * nx + i - 1] + A[(iz * ny + j - 1) * nx + i] + A[(iz * ny + j) * nx + i - 1] + A[(iz * ny + j) * nx + i]) / 4;
+}
+
+/* ================= 3D renderer (WebGPU) ================= */
+const INF = [[0,0,4],[40,11,84],[101,21,110],[159,42,99],[212,72,66],[245,125,21],[250,193,39],[252,255,164]];
+const DIV = [[120,220,255],[40,110,230],[20,30,90],[6,8,12],[110,30,20],[230,110,30],[255,225,120]];
+function lutRow(stops) {
+  const L = new Uint8Array(1024);
+  for (let i = 0; i < 256; i++) { const t = i / 255 * (stops.length - 1), k = Math.min(stops.length - 2, Math.floor(t)), f = t - k;
+    for (let c = 0; c < 3; c++) L[4 * i + c] = stops[k][c] * (1 - f) + stops[k + 1][c] * f; L[4 * i + 3] = 255; }
+  return L;
+}
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const fmtB = v => Math.abs(v) >= 0.1 ? v.toFixed(2) + " T" : (v * 1e3).toFixed(Math.abs(v) >= 0.01 ? 1 : 2) + " mT";
+function pctl(vals, q) { const s = Array.from(vals).sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(q * s.length))] || 1e-12; }
+
+/* ---- small linear algebra, column-major ---- */
+const M4 = {
+  persp(fy, asp, n, f) { const t = 1 / Math.tan(fy / 2), m = new Float32Array(16); m[0] = t / asp; m[5] = t; m[10] = f / (n - f); m[11] = -1; m[14] = n * f / (n - f); return m; },
+  look(e, c, u) {
+    const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], nrm = a => { const l = Math.hypot(...a); return a.map(x => x / l); };
+    const cr = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], dt = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const z = nrm(sub(e, c)), x = nrm(cr(u, z)), y = cr(z, x);
+    return new Float32Array([x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dt(x, e), -dt(y, e), -dt(z, e), 1]);
+  },
+  mul(a, b) { const r = new Float32Array(16); for (let c = 0; c < 4; c++) for (let i = 0; i < 4; i++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + i] * b[c * 4 + k]; r[c * 4 + i] = s; } return r; },
+  inv(m) {
+    const a = m, o = new Float32Array(16);
+    const b00 = a[0]*a[5]-a[1]*a[4], b01 = a[0]*a[6]-a[2]*a[4], b02 = a[0]*a[7]-a[3]*a[4], b03 = a[1]*a[6]-a[2]*a[5];
+    const b04 = a[1]*a[7]-a[3]*a[5], b05 = a[2]*a[7]-a[3]*a[6], b06 = a[8]*a[13]-a[9]*a[12], b07 = a[8]*a[14]-a[10]*a[12];
+    const b08 = a[8]*a[15]-a[11]*a[12], b09 = a[9]*a[14]-a[10]*a[13], b10 = a[9]*a[15]-a[11]*a[13], b11 = a[10]*a[15]-a[11]*a[14];
+    const d = 1 / (b00*b11 - b01*b10 + b02*b09 + b03*b08 - b04*b07 + b05*b06);
+    o[0]=(a[5]*b11-a[6]*b10+a[7]*b09)*d; o[1]=(a[2]*b10-a[1]*b11-a[3]*b09)*d; o[2]=(a[13]*b05-a[14]*b04+a[15]*b03)*d; o[3]=(a[10]*b04-a[9]*b05-a[11]*b03)*d;
+    o[4]=(a[6]*b08-a[4]*b11-a[7]*b07)*d; o[5]=(a[0]*b11-a[2]*b08+a[3]*b07)*d; o[6]=(a[14]*b02-a[12]*b05-a[15]*b01)*d; o[7]=(a[8]*b05-a[10]*b02+a[11]*b01)*d;
+    o[8]=(a[4]*b10-a[5]*b08+a[7]*b06)*d; o[9]=(a[1]*b08-a[0]*b10-a[3]*b06)*d; o[10]=(a[12]*b04-a[13]*b02+a[15]*b00)*d; o[11]=(a[9]*b02-a[8]*b04-a[11]*b00)*d;
+    o[12]=(a[5]*b07-a[4]*b09-a[6]*b06)*d; o[13]=(a[0]*b09-a[1]*b07+a[2]*b06)*d; o[14]=(a[13]*b01-a[12]*b03-a[14]*b00)*d; o[15]=(a[8]*b03-a[9]*b01+a[10]*b00)*d;
+    return o;
+  }
+};
+
+/* ---- mesh building (mm, analytic geometry — nothing rasterized) ---- */
+const rgba = (hex, spec = 0) => { const n = parseInt(hex.slice(1), 16); return ((n >> 16) & 255) | (((n >> 8) & 255) << 8) | ((n & 255) << 16) | (Math.round(spec * 255) << 24); };
+class MeshB {
+  constructor() { this.f = []; this.c = []; }
+  v(p, n, c) { this.f.push(p[0], p[1], p[2], n[0], n[1], n[2]); this.c.push(c); }
+  quad(a, b, c, d, na, nb, nc, nd, col) { this.v(a, na, col); this.v(b, nb, col); this.v(c, nc, col); this.v(a, na, col); this.v(c, nc, col); this.v(d, nd, col); }
+  pack() {
+    const n = this.c.length, ab = new ArrayBuffer(n * 28), f = new Float32Array(ab), u = new Uint32Array(ab);
+    for (let i = 0; i < n; i++) { for (let k = 0; k < 6; k++) f[i * 7 + k] = this.f[i * 6 + k]; u[i * 7 + 6] = this.c[i]; }
+    return { data: f, count: n };
+  }
+}
+function annular(mb, r0, r1, a0, a1, z0, z1, col) {
+  // Closed annular sector with outward-facing winding (counter-clockwise seen from outside), so exports are valid solids.
+  const full = a1 - a0 >= 2 * Math.PI - 1e-6, n = Math.max(6, Math.ceil((a1 - a0) / (2 * Math.PI) * 192));
+  const P = (r, t, z) => [r * Math.cos(t), r * Math.sin(t), z], R = t => [Math.cos(t), Math.sin(t), 0], Rn = t => [-Math.cos(t), -Math.sin(t), 0];
+  const up = [0, 0, 1], dn = [0, 0, -1], ang = i => i === n ? a1 : a0 + (a1 - a0) * i / n;
+  for (let i = 0; i < n; i++) {
+    const t0 = ang(i), t1 = full && i === n - 1 ? a0 : ang(i + 1);
+    mb.quad(P(r0, t0, z1), P(r1, t0, z1), P(r1, t1, z1), P(r0, t1, z1), up, up, up, up, col);
+    mb.quad(P(r0, t0, z0), P(r0, t1, z0), P(r1, t1, z0), P(r1, t0, z0), dn, dn, dn, dn, col);
+    mb.quad(P(r1, t0, z0), P(r1, t1, z0), P(r1, t1, z1), P(r1, t0, z1), R(t0), R(t1), R(t1), R(t0), col);
+    if (r0 > 0) mb.quad(P(r0, t0, z0), P(r0, t0, z1), P(r0, t1, z1), P(r0, t1, z0), Rn(t0), Rn(t0), Rn(t1), Rn(t1), col);
+  }
+  if (!full) {
+    const n0 = [Math.sin(a0), -Math.cos(a0), 0], n1 = [-Math.sin(a1), Math.cos(a1), 0];
+    mb.quad(P(r0, a0, z0), P(r1, a0, z0), P(r1, a0, z1), P(r0, a0, z1), n0, n0, n0, n0, col);
+    mb.quad(P(r0, a1, z0), P(r0, a1, z1), P(r1, a1, z1), P(r1, a1, z0), n1, n1, n1, n1, col);
+  }
+}
+function rotorSolid(mb, p, g, col) {
+  // One watertight solid: a yoke ring with the salient poles fused to its underside.
+  const TAU = 2 * Math.PI, P2 = TAU / p.poles, half = p.arc * P2 / 2, th0 = p.theta * Math.PI / 180;
+  const wrap = a => ((a % TAU) + TAU) % TAU, brk = new Set();
+  for (let i = 0; i < 384; i++) brk.add(+(TAU * i / 384).toFixed(12));
+  for (let k = 0; k < p.poles; k++) { const c = th0 + k * P2; brk.add(+wrap(c - half).toFixed(12)); brk.add(+wrap(c + half).toFixed(12)); }
+  const A = [...brk].sort((a, b) => a - b).filter((a, i, arr) => i === 0 || a - arr[i - 1] > 1e-9);
+  const inPole = t => { let d = t - th0; d = ((d % P2) + P2 + P2 / 2) % P2 - P2 / 2; return Math.abs(d) < half; };
+  const { Rri: r0, Rro: r1, zTB, zTT, zYT } = g, n = A.length;
+  const P = (r, t, z) => [r * Math.cos(t), r * Math.sin(t), z], R = t => [Math.cos(t), Math.sin(t), 0], Rn = t => [-Math.cos(t), -Math.sin(t), 0];
+  const up = [0, 0, 1], dn = [0, 0, -1];
+  const pole = A.map((a, i) => { const b = i === n - 1 ? A[0] + TAU : A[i + 1]; return inPole((a + b) / 2); });
+  for (let i = 0; i < n; i++) {
+    const t0 = A[i], t1 = A[(i + 1) % n], zb = pole[i] ? zTB : zTT;
+    mb.quad(P(r0, t0, zYT), P(r1, t0, zYT), P(r1, t1, zYT), P(r0, t1, zYT), up, up, up, up, col);
+    mb.quad(P(r0, t0, zb), P(r0, t1, zb), P(r1, t1, zb), P(r1, t0, zb), dn, dn, dn, dn, col);
+    const levels = pole[i] ? [zTB, zTT, zYT] : [zTT, zYT];
+    for (let j = 0; j < levels.length - 1; j++) {
+      const za = levels[j], zc = levels[j + 1];
+      mb.quad(P(r1, t0, za), P(r1, t1, za), P(r1, t1, zc), P(r1, t0, zc), R(t0), R(t1), R(t1), R(t0), col);
+      mb.quad(P(r0, t0, za), P(r0, t0, zc), P(r0, t1, zc), P(r0, t1, za), Rn(t0), Rn(t0), Rn(t1), Rn(t1), col);
+    }
+    const next = pole[(i + 1) % n];
+    if (pole[i] !== next) {
+      const t = t1, nt = pole[i] ? [-Math.sin(t), Math.cos(t), 0] : [Math.sin(t), -Math.cos(t), 0];
+      if (pole[i]) mb.quad(P(r0, t, zTB), P(r0, t, zTT), P(r1, t, zTT), P(r1, t, zTB), nt, nt, nt, nt, col);
+      else mb.quad(P(r0, t, zTB), P(r1, t, zTB), P(r1, t, zTT), P(r0, t, zTT), nt, nt, nt, nt, col);
+    }
+  }
+}
+function ribbon(mb, pts, z, w, col, closed = true) {
+  const n = pts.length, off = [], nz = [0, 0, 1];
+  for (let i = 0; i < n; i++) {
+    const p = pts[(i - 1 + n) % n], c = pts[i], q = pts[(i + 1) % n];
+    const e1 = [c[0] - p[0], c[1] - p[1]], e2 = [q[0] - c[0], q[1] - c[1]];
+    const l1 = Math.hypot(...e1) || 1, l2 = Math.hypot(...e2) || 1;
+    const n1 = [-e1[1] / l1, e1[0] / l1], n2 = [-e2[1] / l2, e2[0] / l2];
+    let m = [n1[0] + n2[0], n1[1] + n2[1]]; const lm = Math.hypot(...m) || 1; m = [m[0] / lm, m[1] / lm];
+    const s = Math.min(3, 1 / Math.max(0.3, m[0] * n2[0] + m[1] * n2[1]));
+    off.push([m[0] * s * w / 2, m[1] * s * w / 2]);
+  }
+  for (let i = 0; i < (closed ? n : n - 1); i++) {
+    const j = (i + 1) % n, a = pts[i], b = pts[j], oa = off[i], ob = off[j];
+    mb.quad([a[0] - oa[0], a[1] - oa[1], z], [b[0] - ob[0], b[1] - ob[1], z], [b[0] + ob[0], b[1] + ob[1], z], [a[0] + oa[0], a[1] + oa[1], z], nz, nz, nz, nz, col);
+  }
+}
+function sphereMesh(mb, R, col) {
+  const nu = 64, nv = 32, P = (u, v) => [R * Math.sin(v) * Math.cos(u), R * Math.sin(v) * Math.sin(u), R * Math.cos(v)], N = (u, v) => P(u, v).map(x => x / R);
+  for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+    const u0 = 2 * Math.PI * i / nu, u1 = 2 * Math.PI * (i + 1) / nu, v0 = Math.PI * j / nv, v1 = Math.PI * (j + 1) / nv;
+    mb.quad(P(u0, v0), P(u1, v0), P(u1, v1), P(u0, v1), N(u0, v0), N(u1, v0), N(u1, v1), N(u0, v1), col);
+  }
+}
+function buildMeshes(job) {
+  const out = {}, phaseHex = [css("--pa") || "#D0453A", css("--pb") || "#2E9E5B", css("--pc") || "#3569D6"];
+  const toHex = s => s.startsWith("#") && s.length === 7 ? s : "#C87533";
+  const tcol = phaseHex.map(h => rgba(toHex(h), 0.9));
+  if (job.kind === "motor") {
+    const { p, g } = job, P2 = 2 * Math.PI / p.poles, half = p.arc * P2 / 2, th0 = p.theta * Math.PI / 180;
+    let mb = new MeshB(); rotorSolid(mb, p, g, rgba("#5A6070", 0.35)); out.rotor = mb.pack();
+    if (p.back) { mb = new MeshB(); annular(mb, g.Rri, g.Rro, 0, 2 * Math.PI, g.zBB, g.zBT, rgba("#4B5361", 0.3)); out.back = mb.pack(); }
+    mb = new MeshB(); annular(mb, Math.max(0, p.ri - 3), p.ro + 3, 0, 2 * Math.PI, -g.pcbHalf, g.pcbHalf, rgba("#1B2029", 0.25)); out.pcb = mb.pack();
+    mb = new MeshB();
+    for (const { pts, ph } of job.polys) { ribbon(mb, pts, g.pcbHalf + 0.035, 0.34, tcol[ph]); ribbon(mb, pts, -g.pcbHalf - 0.035, 0.34, tcol[ph]); }
+    out.traces = mb.pack();
+  } else if (job.kind === "loop") {
+    const mb = new MeshB(); ribbon(mb, job.polys[0].pts, 0, 0.8, tcol[0]); out.traces = mb.pack();
+  } else {
+    const mb = new MeshB(); sphereMesh(mb, job.a, rgba("#5A6070", 0.35)); out.rotor = mb.pack();
+  }
+  return out;
+}
+
+/* ---- field lines: RK2 streamlines of B, seeded in proportion to flux ---- */
+function traceLines(sol, bScale) {
+  const { job, Bx, By, Bz } = sol, { nx, ny, nz, hm, x0, y0, z0 } = job;
+  const xmax = x0 + nx * hm, ymax = y0 + ny * hm, zmax = z0 + nz * hm, m = 1.5 * hm;
+  const S = (x, y, z, o) => {
+    let u = (x - x0) / hm - 0.5, v = (y - y0) / hm - 0.5, w = (z - z0) / hm - 0.5;
+    u = Math.min(nx - 1.001, Math.max(0, u)); v = Math.min(ny - 1.001, Math.max(0, v)); w = Math.min(nz - 1.001, Math.max(0, w));
+    const i = u | 0, j = v | 0, k = w | 0, fu = u - i, fv = v - j, fw = w - k;
+    o[0] = o[1] = o[2] = 0;
+    for (let c = 0; c < 8; c++) {
+      const di = c & 1, dj = (c >> 1) & 1, dk = c >> 2, wt = (di ? fu : 1 - fu) * (dj ? fv : 1 - fv) * (dk ? fw : 1 - fw);
+      const q = ((k + dk) * ny + j + dj) * nx + i + di;
+      o[0] += wt * Bx[q]; o[1] += wt * By[q]; o[2] += wt * Bz[q];
+    }
+    return o;
+  };
+  let zs, rA, rB;
+  if (job.kind === "motor") { zs = (Math.max(...job.zLay) + job.g.zTB) / 2; rA = job.p.ri + 0.5; rB = job.p.ro - 0.5; }
+  else if (job.kind === "sphere") { zs = 0; rA = 0; rB = 1.8 * job.a; }
+  else { zs = 0; rA = 0.1 * job.R; rB = 0.92 * job.R; }
+  const o = [0, 0, 0], cand = [];
+  let bmax = 0;
+  for (let ir = 0; ir < 7; ir++) for (let ia = 0; ia < 120; ia++) {
+    const r = rA + (rB - rA) * (ir + 0.5) / 7, a = 2 * Math.PI * (ia + 0.5 * (ir % 2)) / 120;
+    const x = r * Math.cos(a), y = r * Math.sin(a), bz = Math.abs(S(x, y, zs, o)[2]);
+    cand.push([x, y, bz * r]); bmax = Math.max(bmax, bz * r);
+  }
+  let seed = 12345; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const seeds = cand.filter(c => rnd() < 0.42 * c[2] / bmax).map(c => [c[0], c[1], zs]);
+  const ds = 0.5 * hm, floor = bScale * 1e-3, segs = [];
+  const step = (p, sgn) => {
+    const b = S(p[0], p[1], p[2], o), l = Math.hypot(...b); if (l < floor) return null;
+    const mid = [p[0] + sgn * b[0] / l * ds / 2, p[1] + sgn * b[1] / l * ds / 2, p[2] + sgn * b[2] / l * ds / 2];
+    const b2 = S(mid[0], mid[1], mid[2], o), l2 = Math.hypot(...b2); if (l2 < floor) return null;
+    return [[p[0] + sgn * b2[0] / l2 * ds, p[1] + sgn * b2[1] / l2 * ds, p[2] + sgn * b2[2] / l2 * ds], l2];
+  };
+  const inside = p => p[0] > x0 + m && p[0] < xmax - m && p[1] > y0 + m && p[1] < ymax - m && p[2] > z0 + m && p[2] < zmax - m;
+  for (const s0 of seeds) {
+    for (const sgn of [1, -1]) {
+      let p = s0, lp = Math.hypot(...S(p[0], p[1], p[2], o));
+      for (let n = 0; n < 900; n++) {
+        const r = step(p, sgn); if (!r) break;
+        const [q, l] = r; if (!inside(q)) break;
+        const ta = Math.min(1, Math.sqrt(lp / bScale)), tb = Math.min(1, Math.sqrt(l / bScale));
+        segs.push(p[0], p[1], p[2], ta, q[0], q[1], q[2], tb);
+        p = q; lp = l;
+        if (n > 30 && Math.hypot(p[0] - s0[0], p[1] - s0[1], p[2] - s0[2]) < ds) break;
+      }
+    }
+  }
+  return { data: new Float32Array(segs), count: segs.length / 8, seeds: seeds.length };
+}
+
+/* ---- float16 packing for the field texture ---- */
+const _f = new Float32Array(1), _u = new Uint32Array(_f.buffer);
+function half(v) {
+  _f[0] = v; const x = _u[0], s = (x >>> 16) & 0x8000; let e = ((x >>> 23) & 255) - 112, m = x & 0x7fffff;
+  if (e <= 0) { if (e < -10) return s; m = (m | 0x800000) >> (1 - e); return s | ((m + 0x1000) >> 13); }
+  if (e >= 31) return s | 0x7c00;
+  return s | ((e << 10) + ((m + 0x1000) >> 13));
+}
+
+/* ---- WGSL ---- */
+const FRAME = `struct Frame { vp: mat4x4f, ivp: mat4x4f, cam: vec4f, bmin: vec4f, bmax: vec4f, a: vec4f, b: vec4f, c: vec4f };
+@group(0) @binding(0) var<uniform> F: Frame;
+fn clipped(p: vec3f) -> bool { return F.bmin.w > 0.5 && p.y < -0.001; }`;
+const WG_MESH = `${FRAME}
+struct VO { @builtin(position) pos: vec4f, @location(0) wp: vec3f, @location(1) n: vec3f, @location(2) col: vec4f };
+@vertex fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) c: vec4f) -> VO {
+  var o: VO; o.pos = F.vp * vec4f(p, 1.0); o.wp = p; o.n = n; o.col = c; return o;
+}
+struct FO { @location(0) c: vec4f, @location(1) d: vec4f };
+fn fo(c: vec4f, wp: vec3f) -> FO { var o: FO; o.c = c; o.d = vec4f(length(wp - F.cam.xyz), 0.0, 0.0, 1.0); return o; }
+@fragment fn fs(v: VO) -> FO {
+  if (clipped(v.wp)) { discard; }
+  let V = normalize(F.cam.xyz - v.wp);
+  var N = normalize(v.n); if (dot(N, V) < 0.0) { N = -N; }
+  let L1 = normalize(vec3f(0.35, -0.55, 0.75)); let L2 = normalize(vec3f(-0.6, 0.45, 0.35));
+  let d = max(dot(N, L1), 0.0) * 0.8 + max(dot(N, L2), 0.0) * 0.3;
+  let hemi = 0.5 + 0.5 * N.z;
+  let sp = pow(max(dot(N, normalize(L1 + V)), 0.0), 48.0) * v.col.a;
+  let rim = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+  let col = v.col.rgb * (0.16 + 0.2 * hemi + 0.75 * d) + vec3f(sp * 0.7) + vec3f(0.55, 0.65, 0.8) * rim * 0.18;
+  return fo(vec4f(col, 1.0), v.wp);
+}
+@fragment fn fsGhost(v: VO) -> FO {
+  if (clipped(v.wp)) { discard; }
+  let V = normalize(F.cam.xyz - v.wp); let f = pow(1.0 - abs(dot(normalize(v.n), V)), 2.5);
+  return fo(vec4f(mix(v.col.rgb * 1.8, vec3f(0.8, 0.88, 1.0), 0.45), 0.05 + 0.5 * f), v.wp);
+}`;
+const WG_SLICE = `${FRAME}
+@group(0) @binding(1) var ftex: texture_3d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var lut: texture_2d<f32>;
+struct SO { @builtin(position) pos: vec4f, @location(0) wp: vec3f };
+@vertex fn vs(@location(0) p: vec3f) -> SO { var o: SO; o.pos = F.vp * vec4f(p, 1.0); o.wp = p; return o; }
+struct FO { @location(0) c: vec4f, @location(1) d: vec4f };
+@fragment fn fs(v: SO) -> FO {
+  if (clipped(v.wp)) { discard; }
+  let b = textureSampleLevel(ftex, samp, (v.wp - F.bmin.xyz) / (F.bmax.xyz - F.bmin.xyz), 0.0);
+  var col: vec3f; var a: f32;
+  if (F.b.z > 0.5) {
+    let t = clamp(0.5 + 0.5 * b.z / F.b.w, 0.0, 1.0);
+    col = textureSampleLevel(lut, samp, vec2f(t, 0.75), 0.0).rgb; a = 0.12 + 0.83 * smoothstep(0.04, 0.35, abs(t - 0.5) * 2.0);
+  } else {
+    let t = clamp(b.w / F.a.x, 0.0, 1.0);
+    col = textureSampleLevel(lut, samp, vec2f(t, 0.25), 0.0).rgb; a = 0.12 + 0.83 * smoothstep(0.03, 0.3, t);
+  }
+  var o: FO; o.c = vec4f(col, a);
+  o.d = vec4f(select(65000.0, length(v.wp - F.cam.xyz), a > 0.35), 0.0, 0.0, 1.0); return o;
+}`;
+const WG_LINES = `${FRAME}
+@group(0) @binding(1) var<storage, read> segs: array<vec4f>;
+@group(0) @binding(2) var lut: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+struct LO { @builtin(position) pos: vec4f, @location(0) wp: vec3f, @location(1) t: f32 };
+@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> LO {
+  let a = segs[2u * ii]; let b = segs[2u * ii + 1u];
+  let ca = F.vp * vec4f(a.xyz, 1.0); let cb = F.vp * vec4f(b.xyz, 1.0);
+  let res = F.b.xy;
+  var d = (cb.xy / cb.w - ca.xy / ca.w) * res; let L = length(d);
+  d = select(vec2f(1.0, 0.0), d / L, L > 1e-5);
+  var ends = array<u32, 6>(0u, 0u, 1u, 1u, 0u, 1u);
+  var sides = array<f32, 6>(-1.0, 1.0, -1.0, -1.0, 1.0, 1.0);
+  let e = ends[vi];
+  var c = select(ca, cb, e == 1u);
+  let off = vec2f(-d.y, d.x) * sides[vi] * F.a.w / res;
+  c = vec4f(c.xy + off * c.w, c.z, c.w);
+  var o: LO; o.pos = c; o.wp = select(a.xyz, b.xyz, e == 1u); o.t = select(a.w, b.w, e == 1u); return o;
+}
+struct FO { @location(0) c: vec4f, @location(1) d: vec4f };
+@fragment fn fs(v: LO) -> FO {
+  if (clipped(v.wp)) { discard; }
+  let col = textureSampleLevel(lut, samp, vec2f(0.3 + 0.7 * v.t, 0.25), 0.0).rgb;
+  var o: FO; o.c = vec4f(col * 1.15 + vec3f(0.04), 1.0); o.d = vec4f(length(v.wp - F.cam.xyz), 0.0, 0.0, 1.0); return o;
+}`;
+const WG_FINAL = `${FRAME}
+@group(0) @binding(1) var ftex: texture_3d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var lut: texture_2d<f32>;
+@group(0) @binding(4) var dtex: texture_2d<f32>;
+@group(0) @binding(5) var stex: texture_2d<f32>;
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+  var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+  return vec4f(p[i], 0.0, 1.0);
+}
+@fragment fn fs(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+  let px = vec2i(fc.xy);
+  let scene = textureLoad(stex, px, 0).rgb;
+  let dist = textureLoad(dtex, px, 0).r;
+  if (F.c.x < 0.5) { return vec4f(scene, 1.0); }
+  let res = F.b.xy;
+  let ndc = vec2f(fc.x / res.x * 2.0 - 1.0, 1.0 - fc.y / res.y * 2.0);
+  let pn = F.ivp * vec4f(ndc, 0.0, 1.0); let pf = F.ivp * vec4f(ndc, 1.0, 1.0);
+  let ro = pn.xyz / pn.w; let rd = normalize(pf.xyz / pf.w - ro);
+  let inv = 1.0 / rd;
+  let t0 = (F.bmin.xyz - ro) * inv; let t1 = (F.bmax.xyz - ro) * inv;
+  let tn = min(t0, t1); let tf = max(t0, t1);
+  let tmin = max(max(tn.x, tn.y), max(tn.z, 0.0));
+  var tmax = min(tf.x, min(tf.y, tf.z));
+  if (dist < 60000.0) { tmax = min(tmax, dist - length(ro - F.cam.xyz)); }
+  if (tmax <= tmin) { return vec4f(scene, 1.0); }
+  let ext = F.bmax.xyz - F.bmin.xyz;
+  let dt = length(ext) / 360.0;
+  var t = tmin + dt * fract(sin(dot(fc.xy, vec2f(12.9898, 78.233))) * 43758.5453);
+  var acc = vec3f(0.0); var al = 0.0;
+  for (var i = 0; i < 720; i++) {
+    if (t >= tmax || al > 0.97) { break; }
+    let p = ro + rd * t;
+    if (!clipped(p)) {
+      let tt = clamp(textureSampleLevel(ftex, samp, (p - F.bmin.xyz) / ext, 0.0).w / F.a.x, 0.0, 1.0);
+      let dens = pow(smoothstep(F.a.z, 1.0, tt), 1.4);
+      let a = 1.0 - exp(-F.a.y * dens * dt);
+      let col = textureSampleLevel(lut, samp, vec2f(tt, 0.25), 0.0).rgb;
+      acc += (1.0 - al) * a * col * 1.5; al += (1.0 - al) * a;
+    }
+    t += dt;
+  }
+  return vec4f(scene * (1.0 - al) + acc, 1.0);
+}`;
+
+/* ---- renderer state ---- */
+const V = {
+  ok: false, dirty: true, dev: null, ctx: null, fmt: null, W: 0, H: 0, tex: null,
+  cam: { az: -2.25, el: 0.5, dist: 120, target: [0, 0, 2] }, home: null,
+  opt: { volume: true, lines: true, slice: "off", sliceField: "bz", rotor: "ghost", pcb: true, back: true, cut: false, density: 0.35, thr: 0.18, sliceZ: 0 },
+  mesh: {}, lines: null, field: null, box: [[-50, -50, -30], [50, 50, 30]], bScale: 1, bzScale: 1, job: null
+};
+async function initRenderer() {
+  const G = await initGPU(), dev = G.device, cv = $("#gl");
+  V.dev = dev; V.fmt = navigator.gpu.getPreferredCanvasFormat();
+  V.ctx = cv.getContext("webgpu"); V.ctx.configure({ device: dev, format: V.fmt, alphaMode: "opaque" });
+  const mod = code => dev.createShaderModule({ code });
+  const mMesh = mod(WG_MESH), mSlice = mod(WG_SLICE), mLines = mod(WG_LINES), mFinal = mod(WG_FINAL);
+  const meshVB = [{ arrayStride: 28, attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }, { shaderLocation: 1, offset: 12, format: "float32x3" }, { shaderLocation: 2, offset: 24, format: "unorm8x4" }] }];
+  const blend = { color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" }, alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha" } };
+  const ds = w => ({ format: "depth32float", depthWriteEnabled: w, depthCompare: "less" });
+  const ms = { count: 4 }, prim = { topology: "triangle-list", cullMode: "none" };
+  const minB = { color: { operation: "min", srcFactor: "one", dstFactor: "one" }, alpha: { operation: "min", srcFactor: "one", dstFactor: "one" } };
+  const T = (b, dw = true) => [b ? { format: V.fmt, blend: b } : { format: V.fmt }, dw ? { format: "rgba16float", blend: minB } : { format: "rgba16float", writeMask: 0 }];
+  V.pl = {
+    mesh: dev.createRenderPipeline({ layout: "auto", vertex: { module: mMesh, entryPoint: "vs", buffers: meshVB }, fragment: { module: mMesh, entryPoint: "fs", targets: T(null) }, primitive: prim, depthStencil: ds(true), multisample: ms }),
+    ghost: dev.createRenderPipeline({ layout: "auto", vertex: { module: mMesh, entryPoint: "vs", buffers: meshVB }, fragment: { module: mMesh, entryPoint: "fsGhost", targets: T(blend, false) }, primitive: prim, depthStencil: ds(false), multisample: ms }),
+    slice: dev.createRenderPipeline({ layout: "auto", vertex: { module: mSlice, entryPoint: "vs", buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }] }] }, fragment: { module: mSlice, entryPoint: "fs", targets: T(blend) }, primitive: prim, depthStencil: ds(false), multisample: ms }),
+    lines: dev.createRenderPipeline({ layout: "auto", vertex: { module: mLines, entryPoint: "vs" }, fragment: { module: mLines, entryPoint: "fs", targets: T(null) }, primitive: prim, depthStencil: ds(true), multisample: ms }),
+    final: dev.createRenderPipeline({ layout: "auto", vertex: { module: mFinal, entryPoint: "vs" }, fragment: { module: mFinal, entryPoint: "fs", targets: [{ format: V.fmt }] }, primitive: { topology: "triangle-list" } })
+  };
+  V.ubo = dev.createBuffer({ size: 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  V.samp = dev.createSampler({ magFilter: "linear", minFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge", addressModeW: "clamp-to-edge" });
+  V.lut = dev.createTexture({ size: [256, 2], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  const lutData = new Uint8Array(2048); lutData.set(lutRow(INF), 0); lutData.set(lutRow(DIV), 1024);
+  dev.queue.writeTexture({ texture: V.lut }, lutData, { bytesPerRow: 1024 }, [256, 2]);
+  setField(new Uint16Array(4), 1, 1, 1);
+  V.bgMesh = dev.createBindGroup({ layout: V.pl.mesh.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: V.ubo } }] });
+  V.bgGhost = dev.createBindGroup({ layout: V.pl.ghost.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: V.ubo } }] });
+  new ResizeObserver(() => { V.dirty = true; }).observe(cv);
+  hookCamera(cv);
+  V.ok = true; V.dirty = true;
+  requestAnimationFrame(frame);
+}
+function setField(data, nx, ny, nz) {
+  if (V.field) V.field.destroy();
+  V.field = V.dev.createTexture({ size: [nx, ny, nz], dimension: "3d", format: "rgba16float", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  V.dev.queue.writeTexture({ texture: V.field }, data, { bytesPerRow: nx * 8, rowsPerImage: ny }, [nx, ny, nz]);
+  V.bgSlice = V.dev.createBindGroup({ layout: V.pl.slice.getBindGroupLayout(0), entries: [
+    { binding: 0, resource: { buffer: V.ubo } }, { binding: 1, resource: V.field.createView() }, { binding: 2, resource: V.samp }, { binding: 3, resource: V.lut.createView() }] });
+  V.tex = null;
+}
+function ensureTargets() {
+  const cv = $("#gl"), dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const W = Math.max(64, Math.round(cv.clientWidth * dpr)), H = Math.max(64, Math.round(cv.clientHeight * dpr));
+  if (V.tex && V.W === W && V.H === H) return;
+  cv.width = W; cv.height = H; V.W = W; V.H = H;
+  if (V.tex) for (const t of Object.values(V.tex)) t.destroy();
+  const d = V.dev, RA = GPUTextureUsage.RENDER_ATTACHMENT, TB = GPUTextureUsage.TEXTURE_BINDING;
+  V.tex = {
+    msaa: d.createTexture({ size: [W, H], format: V.fmt, sampleCount: 4, usage: RA }),
+    scene: d.createTexture({ size: [W, H], format: V.fmt, usage: RA | TB }),
+    depth: d.createTexture({ size: [W, H], format: "depth32float", sampleCount: 4, usage: RA }),
+    distMs: d.createTexture({ size: [W, H], format: "rgba16float", sampleCount: 4, usage: RA }),
+    dist: d.createTexture({ size: [W, H], format: "rgba16float", usage: RA | TB })
+  };
+  V.bgFinal = d.createBindGroup({ layout: V.pl.final.getBindGroupLayout(0), entries: [
+    { binding: 0, resource: { buffer: V.ubo } }, { binding: 1, resource: V.field.createView() }, { binding: 2, resource: V.samp },
+    { binding: 3, resource: V.lut.createView() }, { binding: 4, resource: V.tex.dist.createView() }, { binding: 5, resource: V.tex.scene.createView() }] });
+}
+function vbuf(mesh) {
+  const b = V.dev.createBuffer({ size: Math.max(28, mesh.data.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+  V.dev.queue.writeBuffer(b, 0, mesh.data); return { buf: b, count: mesh.count };
+}
+function buildSlices() {
+  const [mn, mx] = V.box, job = V.job, z = V.opt.sliceZ, pts = [];
+  if (!job) return;
+  if (V.opt.slice === "gap") {
+    const R = job.kind === "motor" ? job.g.Rro + 8 : 0.9 * (mx[0] - mn[0]) / 2, n = 160;
+    for (let i = 0; i < n; i++) { const a0 = 2 * Math.PI * i / n, a1 = 2 * Math.PI * (i + 1) / n; pts.push(0, 0, z, R * Math.cos(a0), R * Math.sin(a0), z, R * Math.cos(a1), R * Math.sin(a1), z); }
+  } else if (V.opt.slice === "axial") {
+    const q = [[mn[0], 0, mn[2]], [mx[0], 0, mn[2]], [mx[0], 0, mx[2]], [mn[0], 0, mx[2]]];
+    for (const i of [0, 1, 2, 0, 2, 3]) pts.push(...q[i]);
+  }
+  if (V.sliceBuf) V.sliceBuf.buf.destroy();
+  V.sliceBuf = pts.length ? vbuf({ data: new Float32Array(pts), count: pts.length / 3 }) : null;
+  V.dirty = true;
+}
+function updateScene(sol, keepView) {
+  if (!V.ok) return;
+  const job = sol.job, { nx, ny, nz, hm, x0, y0, z0 } = job, N = nx * ny * nz;
+  V.job = job;
+  V.box = [[x0, y0, z0], [x0 + nx * hm, y0 + ny * hm, z0 + nz * hm]];
+  const mag = [], bzs = [];
+  for (let iz = 1; iz < nz - 1; iz += 1) for (let iy = 1; iy < ny - 1; iy += 2) for (let ix = 1; ix < nx - 1; ix += 2) {
+    const x = x0 + (ix + .5) * hm, y = y0 + (iy + .5) * hm, z = z0 + (iz + .5) * hm;
+    if (job.kind === "motor" && (Math.hypot(x, y) > job.g.Rro + 4 || z < (job.p.back ? job.g.zBB : -1) - 3 || z > job.g.zYT + 3)) continue;
+    const k = (iz * ny + iy) * nx + ix; mag.push(Math.hypot(sol.Bx[k], sol.By[k], sol.Bz[k])); bzs.push(Math.abs(sol.Bz[k]));
+  }
+  V.bScale = pctl(mag, 0.99) * 1e3; V.bzScale = pctl(bzs, 0.99) * 1e3;
+  const data = new Uint16Array(4 * N);
+  for (let k = 0; k < N; k++) {
+    const bx = sol.Bx[k] * 1e3, by = sol.By[k] * 1e3, bz = sol.Bz[k] * 1e3;
+    data[4 * k] = half(bx); data[4 * k + 1] = half(by); data[4 * k + 2] = half(bz); data[4 * k + 3] = half(Math.hypot(bx, by, bz));
+  }
+  setField(data, nx, ny, nz);
+  for (const m of Object.values(V.mesh)) m.buf.destroy();
+  V.mesh = {}; for (const [k, m] of Object.entries(buildMeshes(job))) V.mesh[k] = vbuf(m);
+  const L = traceLines(sol, V.bScale * 1e-3);
+  if (V.lines) V.lines.buf.destroy();
+  if (L.count) { const b = V.dev.createBuffer({ size: L.data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }); V.dev.queue.writeBuffer(b, 0, L.data);
+    V.lines = { buf: b, count: L.count, bg: V.dev.createBindGroup({ layout: V.pl.lines.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: V.ubo } }, { binding: 1, resource: { buffer: b } }, { binding: 2, resource: V.lut.createView() }, { binding: 3, resource: V.samp }] }), seeds: L.seeds }; }
+  else V.lines = null;
+  const zs = $("#sliceZ");
+  zs.min = V.box[0][2]; zs.max = V.box[1][2]; zs.step = hm / 2;
+  if (!keepView) {
+    V.opt.sliceZ = job.kind === "motor" ? (Math.max(...job.zLay) + job.g.zTB) / 2 : 0;
+    const zc = job.kind === "motor" ? ((job.p.back ? job.g.zBB : -1) + job.g.zYT) / 2 : 0, R = job.kind === "motor" ? job.g.Rro : job.kind === "loop" ? job.R * 1.6 : job.a * 2.2;
+    V.home = { az: -2.25, el: 0.55, dist: R * 2.7, target: [0, 0, zc] }; Object.assign(V.cam, JSON.parse(JSON.stringify(V.home)));
+  }
+  zs.value = V.opt.sliceZ;
+  buildSlices(); updateLegend();
+  $("#empty").hidden = true;
+  V.dirty = true;
+}
+function updateLegend() {
+  const bar = (id, row) => { const c = $(id), x = c.getContext("2d"), im = x.createImageData(256, 1), L = lutRow(row); im.data.set(L); x.putImageData(im, 0, 0); };
+  bar("#barB", INF); bar("#barS", V.opt.sliceField === "bz" ? DIV : INF);
+  $("#barBmax").textContent = fmtB(V.bScale * 1e-3);
+  $("#barSmin").textContent = V.opt.sliceField === "bz" ? "−" + fmtB(V.bzScale * 1e-3) : "0";
+  $("#barSmax").textContent = fmtB((V.opt.sliceField === "bz" ? V.bzScale : V.bScale) * 1e-3);
+  $("#sliceLegend").hidden = V.opt.slice === "off";
+  $("#sliceZval").textContent = `${(+V.opt.sliceZ).toFixed(1)} mm`;
+  $("#lineInfo").textContent = V.lines ? `${V.lines.seeds} field lines, seeded in proportion to gap flux` : "";
+}
+function frame() {
+  requestAnimationFrame(frame);
+  if (!V.ok || !V.dirty) return;
+  V.dirty = false;
+  ensureTargets();
+  const { az, el, dist, target } = V.cam;
+  const eye = [target[0] + dist * Math.cos(el) * Math.cos(az), target[1] + dist * Math.cos(el) * Math.sin(az), target[2] + dist * Math.sin(el)];
+  const view = M4.look(eye, target, [0, 0, 1]), proj = M4.persp(0.7, V.W / V.H, Math.max(0.5, dist * 0.02), dist * 6);
+  const vp = M4.mul(proj, view), ivp = M4.inv(vp), o = V.opt, u = new Float32Array(64);
+  u.set(vp, 0); u.set(ivp, 16);
+  u.set([...eye, 0], 32); u.set([...V.box[0], o.cut ? 1 : 0], 36); u.set([...V.box[1], 0], 40);
+  u.set([V.bScale, o.density * 0.6, o.thr, 1.35 * Math.min(window.devicePixelRatio || 1, 2)], 44);
+  u.set([V.W, V.H, o.sliceField === "bz" ? 1 : 0, V.bzScale], 48);
+  u.set([o.volume && V.job ? 1 : 0, 0, 0, 0], 52);
+  V.dev.queue.writeBuffer(V.ubo, 0, u);
+  const enc = V.dev.createCommandEncoder();
+  const p = enc.beginRenderPass({
+    colorAttachments: [{ view: V.tex.msaa.createView(), resolveTarget: V.tex.scene.createView(), clearValue: { r: 0.043, g: 0.058, b: 0.082, a: 1 }, loadOp: "clear", storeOp: "discard" },
+                       { view: V.tex.distMs.createView(), resolveTarget: V.tex.dist.createView(), clearValue: { r: 65000, g: 0, b: 0, a: 1 }, loadOp: "clear", storeOp: "discard" }],
+    depthStencilAttachment: { view: V.tex.depth.createView(), depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "store" } });
+  const drawMesh = (m, pl, bg) => { if (!m) return; p.setPipeline(pl); p.setBindGroup(0, bg); p.setVertexBuffer(0, m.buf); p.draw(m.count); };
+  if (o.pcb) drawMesh(V.mesh.pcb, V.pl.mesh, V.bgMesh);
+  drawMesh(V.mesh.traces, V.pl.mesh, V.bgMesh);
+  if (o.back) drawMesh(V.mesh.back, V.pl.mesh, V.bgMesh);
+  if (o.rotor === "solid") drawMesh(V.mesh.rotor, V.pl.mesh, V.bgMesh);
+  if (o.lines && V.lines) { p.setPipeline(V.pl.lines); p.setBindGroup(0, V.lines.bg); p.draw(6, V.lines.count); }
+  if (o.slice !== "off" && V.sliceBuf) { p.setPipeline(V.pl.slice); p.setBindGroup(0, V.bgSlice); p.setVertexBuffer(0, V.sliceBuf.buf); p.draw(V.sliceBuf.count); }
+  if (o.rotor === "ghost") drawMesh(V.mesh.rotor, V.pl.ghost, V.bgGhost);
+  p.end();
+  const q = enc.beginRenderPass({ colorAttachments: [{ view: V.ctx.getCurrentTexture().createView(), loadOp: "clear", clearValue: { r: 0, g: 0, b: 0, a: 1 }, storeOp: "store" }] });
+  q.setPipeline(V.pl.final); q.setBindGroup(0, V.bgFinal); q.draw(3); q.end();
+  V.dev.queue.submit([enc.finish()]);
+}
+function hookCamera(cv) {
+  let drag = null;
+  cv.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY, pan: e.shiftKey || e.button === 2 }; cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener("pointermove", e => {
+    if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
+    const c = V.cam;
+    if (drag.pan) {
+      const s = c.dist * 0.0016, rx = [-Math.sin(c.az), Math.cos(c.az), 0], ux = [-Math.sin(c.el) * Math.cos(c.az), -Math.sin(c.el) * Math.sin(c.az), Math.cos(c.el)];
+      for (let i = 0; i < 3; i++) c.target[i] += (-dx * rx[i] + dy * ux[i]) * s;
+    } else { c.az -= dx * 0.008; c.el = Math.max(-1.5, Math.min(1.5, c.el + dy * 0.008)); }
+    V.dirty = true;
+  });
+  const end = () => { drag = null; };
+  cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
+  cv.addEventListener("contextmenu", e => e.preventDefault());
+  cv.addEventListener("wheel", e => { e.preventDefault(); V.cam.dist *= Math.exp(e.deltaY * 0.0012); V.dirty = true; }, { passive: false });
+  cv.addEventListener("dblclick", () => { if (V.home) { Object.assign(V.cam, JSON.parse(JSON.stringify(V.home))); V.dirty = true; } });
+}
+function hookViewControls() {
+  const seg = (attr, key, after) => document.querySelectorAll(`[${attr}]`).forEach(b => b.onclick = () => {
+    V.opt[key] = b.getAttribute(attr); document.querySelectorAll(`[${attr}]`).forEach(x => x.setAttribute("aria-pressed", x === b)); after && after(); updateLegend(); V.dirty = true; });
+  seg("data-slice", "slice", buildSlices); seg("data-sfield", "sliceField"); seg("data-rotor", "rotor");
+  for (const [id, key] of [["#oVolume", "volume"], ["#oLines", "lines"], ["#oPcb", "pcb"], ["#oBack", "back"], ["#oCut", "cut"]])
+    $(id).onchange = e => { V.opt[key] = e.target.checked; V.dirty = true; };
+  $("#oDensity").oninput = e => { V.opt.density = +e.target.value; V.dirty = true; };
+  $("#oThr").oninput = e => { V.opt.thr = +e.target.value; V.dirty = true; };
+  $("#sliceZ").oninput = e => { V.opt.sliceZ = +e.target.value; buildSlices(); updateLegend(); };
+  $("#oCut").addEventListener("change", e => { if (e.target.checked && V.opt.slice === "off") document.querySelector('[data-slice="axial"]').click(); });
+}
+
+/* ================= Plots ================= */
+function niceTicks(a, b, count = 5) {
+  const raw = (b - a) / count || 1, mag = 10 ** Math.floor(Math.log10(Math.abs(raw))), e = raw / mag;
+  const step = mag * (e < 1.5 ? 1 : e < 3 ? 2 : e < 7 ? 5 : 10), t = [];
+  for (let v = Math.ceil(a / step) * step; v <= b + step * 1e-9; v += step) t.push(+v.toFixed(10));
+  return t;
+}
+function drawPlot(cv, cfg) {
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const ink = css("--ink"), muted = css("--muted"), line = css("--line");
+  const m = { l: 58, r: 12, t: 12, b: 38 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const [x0, x1] = cfg.xr, [y0, y1] = cfg.yr;
+  const X = x => m.l + (x - x0) / (x1 - x0) * pw, Y = y => m.t + ph - (y - y0) / (y1 - y0) * ph;
+  g.font = "12px IBM Plex Sans, sans-serif"; g.lineWidth = 1; g.strokeStyle = line; g.fillStyle = muted;
+  g.textAlign = "right"; g.textBaseline = "middle";
+  for (const t of cfg.yticks) { g.beginPath(); g.moveTo(m.l, Y(t)); g.lineTo(m.l + pw, Y(t)); g.stroke(); g.fillText(cfg.yfmt(t), m.l - 6, Y(t)); }
+  g.textAlign = "center"; g.textBaseline = "top";
+  for (const t of cfg.xticks) g.fillText(cfg.xfmt(t), X(t), m.t + ph + 6);
+  g.fillText(cfg.xlabel, m.l + pw / 2, H - 16);
+  g.save(); g.translate(12, m.t + ph / 2); g.rotate(-Math.PI / 2); g.textBaseline = "middle"; g.fillText(cfg.ylabel, 0, 0); g.restore();
+  g.save(); g.beginPath(); g.rect(m.l, m.t, pw, ph); g.clip();
+  for (const s of cfg.series) {
+    g.strokeStyle = g.fillStyle = s.color; g.lineWidth = 2;
+    if (s.style === "dots") for (const [x, y] of s.pts) { g.beginPath(); g.arc(X(x), Y(y), 4, 0, 7); g.fill(); }
+    else { g.beginPath(); s.pts.forEach(([x, y], i) => i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y))); g.stroke(); }
+  }
+  g.restore();
+  let lx = m.l + 10; g.textAlign = "left"; g.textBaseline = "middle";
+  for (const s of cfg.series) { g.fillStyle = s.color; g.fillRect(lx, m.t + 8, 10, 3); g.fillStyle = ink; g.fillText(s.label, lx + 14, m.t + 10); lx += g.measureText(s.label).width + 34; }
+}
+function drawSweep() {
+  const sw = state.sweep, cv = $("#sweepPlot");
+  if (!sw || !sw.pts.length) { drawPlot(cv, { xr: [0, 180], yr: [-1, 1], xticks: niceTicks(0, 180, 6), yticks: niceTicks(-1, 1), xfmt: v => v + "°", yfmt: v => v, xlabel: "current angle γ (electrical)", ylabel: "torque (mN·m)", series: [] }); return; }
+  const pts = sw.pts.map(([g, T]) => [g, T * 1e3]);
+  let a = 0, b = 0, ss = 0, cc = 0, sc = 0;
+  for (const [g, T] of pts) { const s = Math.sin(2 * g * Math.PI / 180), c = Math.cos(2 * g * Math.PI / 180); a += T * s; b += T * c; ss += s * s; cc += c * c; sc += s * c; }
+  const det = ss * cc - sc * sc, A = det ? (a * cc - b * sc) / det : 0, Bc = det ? (b * ss - a * sc) / det : 0;
+  const fit = []; for (let g = 0; g <= 180; g += 2) fit.push([g, A * Math.sin(2 * g * Math.PI / 180) + Bc * Math.cos(2 * g * Math.PI / 180)]);
+  const ymax = Math.max(1e-6, ...pts.map(p => Math.abs(p[1])), ...fit.map(p => Math.abs(p[1]))) * 1.15;
+  sw.fit = { amp: Math.hypot(A, Bc), peak: ((Math.atan2(A, Bc) * 180 / Math.PI) / 2 + 180) % 180 };
+  drawPlot(cv, { xr: [0, 180], yr: [-ymax, ymax], xticks: niceTicks(0, 180, 6), yticks: niceTicks(-ymax, ymax),
+    xfmt: v => v + "°", yfmt: v => Math.abs(ymax) < 1 ? v.toFixed(2) : v.toFixed(1), xlabel: "current angle γ (electrical)", ylabel: "torque (mN·m)",
+    series: [{ pts: fit, color: css("--muted"), label: `sin 2γ fit, peak ${sw.fit.amp.toFixed(2)} mN·m at ${sw.fit.peak.toFixed(0)}°` }, { pts, style: "dots", color: css("--gpu"), label: "GPU solve" }] });
+}
+function drawP2() {
+  const sol = state.sol, cv = $("#p2");
+  if (sol && sol.job.kind === "loop") {
+    $("#p2title").textContent = "Loop test: axial field on the axis";
+    const { job } = sol, pts = [], ana = [];
+    for (let iz = 1; iz < job.nz - 1; iz++) { const z = job.z0 + (iz + .5) * job.hm; pts.push([z, interpCentre(sol.Bz, job, iz) * 1e6]); }
+    for (let z = job.z0; z <= -job.z0; z += 0.5) ana.push([z, MU0 * job.R ** 2 / (2 * ((job.R * 1e-3) ** 2 + (z * 1e-3) ** 2) ** 1.5) * 1e-6 * 1e6]);
+    const ymax = Math.max(...ana.map(p => p[1])) * 1.1;
+    drawPlot(cv, { xr: [job.z0, -job.z0], yr: [0, ymax], xticks: niceTicks(job.z0, -job.z0), yticks: niceTicks(0, ymax), xfmt: v => v, yfmt: v => v.toFixed(0), xlabel: "z on axis (mm)", ylabel: "B_z (μT per A)",
+      series: [{ pts: ana, color: css("--muted"), label: "analytic" }, { pts, style: "dots", color: css("--gpu"), label: "GPU Biot-Savart" }] });
+    return;
+  }
+  $("#p2title").textContent = "Convergence of the potential solve";
+  const h = sol && sol.pcg ? sol.pcg.hist.map(([i, r]) => [i, Math.log10(Math.max(r, 1e-12))]) : [];
+  const xm = Math.max(32, ...h.map(p => p[0])), ym = Math.min(-6, Math.floor(Math.min(0, ...h.map(p => p[1]))));
+  drawPlot(cv, { xr: [0, xm], yr: [ym, 0.3], xticks: niceTicks(0, xm), yticks: niceTicks(ym, 0).filter(Number.isInteger), xfmt: v => v, yfmt: v => "1e" + v, xlabel: "CG iteration", ylabel: "relative residual",
+    series: h.length ? [{ pts: h, color: css("--gpu"), label: "GPU f32, Jacobi-preconditioned CG" }] : [] });
+}
+
+/* ================= Panels ================= */
+const pct = (a, b) => (a - b) / b * 100;
+const sgn = v => (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
+function perfPanel(sol) {
+  const t = sol.t, pc = sol.pcg;
+  let rows = `<tr><td>Grid</td><td>${sol.job.nx}×${sol.job.ny}×${sol.job.nz} · ${sol.job.hm.toFixed(2)} mm</td></tr>
+    <tr class="sub"><td>Cells</td><td>${sol.N.toLocaleString()}</td></tr>`;
+  if (sol.nseg) rows += `<tr><td>Biot-Savart, ${sol.nseg.toLocaleString()} segments</td><td>${t.bsCached ? "cached" : t.bs.toFixed(0) + " ms"}</td></tr>` +
+    (t.bsCached ? "" : `<tr class="sub"><td>Throughput</td><td>${(sol.N * sol.nseg / t.bs / 1e6).toFixed(0)} G segment-cell/s</td></tr>`);
+  if (pc) rows += `<tr><td>Potential solve</td><td>${pc.iters} it · ${pc.ms.toFixed(0)} ms</td></tr>
+    <tr class="sub"><td>Per iteration · residual</td><td>${(pc.ms / pc.iters).toFixed(2)} ms · ${pc.rel.toExponential(1)}</td></tr>`;
+  rows += `<tr class="sub"><td>Setup · readback and post</td><td>${t.setup.toFixed(0)} · ${t.post.toFixed(0)} ms</td></tr>`;
+  $("#perf").innerHTML = `<div class="muted" style="font-size:12px;margin-bottom:6px">${state.gpu ? state.gpu.name : ""}</div><table>${rows}</table>`;
+}
+function resultPanel(sol) {
+  const k = sol.job.kind;
+  if (k === "motor") {
+    const m = sol.m, I = sol.I, T = m.T;
+    $("#resTitle").textContent = "Torque and gap field";
+    if (!T.length) { $("#res").innerHTML = `<span class="fail">The air gap is thinner than one grid cell, so no torque surface fits in it. Use a finer grid or a larger gap.</span>`; return; }
+    const Tm = T.reduce((a, b) => a + b, 0) / T.length, agree = T.length > 1 ? Math.abs(T[0] - T[1]) / Math.max(1e-12, Math.abs(Tm)) * 100 : null;
+    $("#res").innerHTML = `
+      <div class="muted" style="font-size:13px">Torque on rotor</div>
+      <div class="big">${(Tm * 1e3).toFixed(3)} mN·m</div>
+      <div style="font-size:13px;margin-bottom:8px">${agree === null ? "One stress surface fits in the gap." : `Two stress surfaces agree within <span class="${agree < 10 ? "pass" : "fail"}">${agree.toFixed(1)}%</span>`}</div>
+      <table>
+        ${T.map((v, i) => `<tr class="sub"><td>Surface ${i + 1}, z = ${(sol.job.z0 + m.planes[i] * sol.job.hm).toFixed(2)} mm</td><td>${(v * 1e3).toFixed(3)} mN·m</td></tr>`).join("")}
+        <tr><td>Phase currents A · B · C</td><td>${I.map(v => v.toFixed(2)).join(" · ")} A</td></tr>
+        <tr><td>Mean |B<sub>z</sub>| mid-gap over coils</td><td>${fmtB(m.gapBz)}</td></tr>
+        <tr><td>Peak |B| in magnetic parts</td><td>${fmtB(m.bmaxMat)}</td></tr>
+        <tr class="sub"><td>Coil turns total</td><td>${sol.job.polys.length / (1.5 * sol.job.p.poles)} per layer · ${sol.job.p.layers} layers</td></tr>
+      </table>`;
+  } else if (k === "sphere") {
+    const { job } = sol, n = job.nx, c = n / 2, B0 = MU0 * job.H0, mr = job.p.murRot, Ban = 3 * mr / (mr + 2) * B0;
+    let s = 0, cnt = 0; for (let q = 0; q < job.mu.length; q++) if (job.mu[q] > mr * 0.999) { s += sol.Bz[q]; cnt++; }
+    const Bavg = s / cnt;
+    let Bc = 0; for (const dz of [-1, 0]) Bc += interpCentre(sol.Bz, job, c + dz) / 2;
+    $("#resTitle").textContent = "Sphere validation";
+    $("#res").innerHTML = `<div class="muted" style="font-size:13px">Mean B<sub>z</sub> inside sphere, μᵣ = ${mr}</div>
+      <div class="big">${(Bavg * 1e3).toFixed(4)} mT</div>
+      <div style="font-size:13px;margin-bottom:8px">Analytic ${(Ban * 1e3).toFixed(4)} mT — <span class="${Math.abs(pct(Bavg, Ban)) < 10 ? "pass" : "fail"}">${sgn(pct(Bavg, Ban))}</span></div>
+      <table><tr><td>B<sub>z</sub> at centre</td><td>${(Bc * 1e3).toFixed(4)} mT (${sgn(pct(Bc, Ban))})</td></tr>
+      <tr><td>Applied field μ₀H₀</td><td>${(B0 * 1e3).toFixed(4)} mT</td></tr>
+      <tr class="sub"><td>Sphere radius · cells across</td><td>${job.a} mm · ${(2 * job.a / job.hm).toFixed(0)}</td></tr></table>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">The interior field is sensitive to the demagnetizing factor, amplified roughly μᵣ/3 times, so a staircased sphere reads a few percent high at moderate μᵣ. The error shrinks with grid refinement, and about 2–3% of it comes from the finite box.</p>`;
+  } else {
+    const { job } = sol; let emax = 0;
+    for (let iz = 1; iz < job.nz - 1; iz++) { const z = job.z0 + (iz + .5) * job.hm; if (Math.abs(z) > 30) continue;
+      const an = MU0 * (job.R * 1e-3) ** 2 / (2 * ((job.R * 1e-3) ** 2 + (z * 1e-3) ** 2) ** 1.5);
+      emax = Math.max(emax, Math.abs(pct(interpCentre(sol.Bz, job, iz), an))); }
+    $("#resTitle").textContent = "Loop validation";
+    $("#res").innerHTML = `<div class="muted" style="font-size:13px">Worst error on axis for |z| ≤ 30 mm</div><div class="big">${emax.toFixed(2)}%</div>
+      <div style="font-size:13px">Loop radius ${job.R} mm, 1 A, 128 segments. The small residual is the polygon approximation plus interpolating four cells onto the axis.</div>`;
+  }
+}
+
+/* ================= Projects: save, open, library, model export ================= */
+const PROJECT_FORMAT = "axial-flux-project", PROJECT_VERSION = 1, LIB_KEY = "axialflux.projects.v1";
+const INPUTS = {
+  poles: ["design.stator.poles", "select"], layers: ["design.stator.copperLayers", "select"],
+  ri: ["design.stator.innerRadius_mm"], ro: ["design.stator.outerRadius_mm"], turns: ["design.stator.turnsPerLayer"], amps: ["design.stator.peakCurrent_A"],
+  gap: ["design.rotor.airGap_mm"], murRot: ["design.rotor.mu_r"], tooth: ["design.rotor.poleHeight_mm"], yoke: ["design.rotor.yokeThickness_mm"], arc: ["design.rotor.poleArcFraction"],
+  back: ["design.backPlate.enabled", "check"], murBack: ["design.backPlate.mu_r"], backT: ["design.backPlate.thickness_mm"], backGap: ["design.backPlate.gapBelowPcb_mm"],
+  theta: ["operatingPoint.rotorAngle_deg"], gamma: ["operatingPoint.currentAngle_elecDeg"], grid: ["solver.gridCellsAcrossDiameter", "select"]
+};
+const getPath = (o, p) => p.split(".").reduce((a, k) => (a == null ? undefined : a[k]), o);
+const setPath = (o, p, v) => { const ks = p.split("."); let a = o; ks.slice(0, -1).forEach(k => a = a[k] ??= {}); a[ks[ks.length - 1]] = v; };
+
+function resultsSummary(sol) {
+  if (!sol || sol.job.kind !== "motor") return null;
+  const T = sol.m.T, Tm = T.length ? T.reduce((a, b) => a + b) / T.length : null;
+  return {
+    torque_mNm: Tm === null ? null : +(Tm * 1e3).toPrecision(5),
+    torqueSurfaces_mNm: T.map(v => +(v * 1e3).toPrecision(5)),
+    gapBzMean_mT: +(sol.m.gapBz * 1e3).toPrecision(4),
+    peakBInMagneticParts_mT: +(sol.m.bmaxMat * 1e3).toPrecision(4),
+    phaseCurrents_A: sol.I.map(v => +v.toFixed(4)),
+    solver: { cells: sol.N, iterations: sol.pcg ? sol.pcg.iters : null, residual: sol.pcg ? +sol.pcg.rel.toPrecision(3) : null }
+  };
+}
+function currentProject() {
+  const p = readP(), proj = { format: PROJECT_FORMAT, version: PROJECT_VERSION, name: ($("#projName").value || "").trim() || "Untitled motor", savedAt: new Date().toISOString() };
+  for (const [id, [path, kind]] of Object.entries(INPUTS)) setPath(proj, path, kind === "check" ? !!p[id] : p[id]);
+  proj.view = { ...V.opt, camera: { azimuth_rad: V.cam.az, elevation_rad: V.cam.el, distance_mm: V.cam.dist, target_mm: [...V.cam.target] } };
+  const sol = state.sol, fresh = sol && sol.job.kind === "motor" && JSON.stringify(sol.job.p) === JSON.stringify(p);
+  proj.results = fresh ? { ...resultsSummary(sol), solvedWithTheseInputs: true } : null;
+  const sw = state.sweep && state.sweep.pts.length && state.sweep.base && JSON.stringify(state.sweep.base) === JSON.stringify({ ...p, gamma: 0 })
+    ? state.sweep.pts.map(([g, T]) => ({ currentAngle_elecDeg: g, torque_mNm: +(T * 1e3).toPrecision(5) })) : null;
+  if (sw) proj.results = { ...(proj.results || {}), currentAngleSweep: sw };
+  proj.notes = ($("#projNotes").value || "").trim();
+  return proj;
+}
+function validateProject(obj) {
+  if (!obj || typeof obj !== "object") throw new Error("That file isn't a project file.");
+  if (obj.format !== PROJECT_FORMAT) throw new Error("That JSON file isn't an axial-flux project file.");
+  if (!(obj.version >= 1)) throw new Error("This project file has no recognised version.");
+  if (obj.version > PROJECT_VERSION) throw new Error(`This project was saved by a newer version of the tool (format ${obj.version}).`);
+  return obj;
+}
+async function applyProject(obj, { solve = true } = {}) {
+  validateProject(obj);
+  const skipped = [];
+  for (const [id, [path, kind]] of Object.entries(INPUTS)) {
+    const v = getPath(obj, path), el = $("#" + id);
+    if (v === undefined) { skipped.push(path); continue; }
+    if (kind === "check") el.checked = !!v;
+    else if (kind === "select") { const s = String(v); if ([...el.options].some(o => o.value === s)) el.value = s; else skipped.push(path); }
+    else if (Number.isFinite(+v)) el.value = +v; else skipped.push(path);
+  }
+  $("#projName").value = obj.name || "";
+  $("#projNotes").value = obj.notes || "";
+  const view = obj.view || {};
+  for (const k of ["volume", "lines", "pcb", "back", "cut"]) if (typeof view[k] === "boolean") V.opt[k] = view[k];
+  for (const k of ["density", "thr", "sliceZ"]) if (Number.isFinite(view[k])) V.opt[k] = view[k];
+  if (["off", "gap", "axial"].includes(view.slice)) V.opt.slice = view.slice;
+  if (["bz", "bmag"].includes(view.sliceField)) V.opt.sliceField = view.sliceField;
+  if (["solid", "ghost", "hidden"].includes(view.rotor)) V.opt.rotor = view.rotor;
+  syncViewControls();
+  const sw = obj.results && obj.results.currentAngleSweep;
+  state.sweep = Array.isArray(sw) ? { pts: sw.filter(r => Number.isFinite(r.currentAngle_elecDeg) && Number.isFinite(r.torque_mNm)).map(r => [r.currentAngle_elecDeg, r.torque_mNm / 1e3]), base: { ...readP(), gamma: 0 } } : null;
+  drawSweep();
+  if (skipped.length) setStatus(`Loaded "${obj.name}". Some values were missing or invalid and kept their current setting: ${skipped.join(", ")}.`);
+  if (solve) {
+    const cam = view.camera;
+    await guarded(async () => {
+      setStatus(`Recomputing the field for "${obj.name || "project"}"…`);
+      const sol = await motorSolve(readP());
+      show(sol, false);
+      if (cam && [cam.azimuth_rad, cam.elevation_rad, cam.distance_mm].every(Number.isFinite) && Array.isArray(cam.target_mm)) {
+        Object.assign(V.cam, { az: cam.azimuth_rad, el: cam.elevation_rad, dist: cam.distance_mm, target: cam.target_mm.slice(0, 3).map(Number) });
+        if (V.opt.sliceZ !== undefined) { $("#sliceZ").value = V.opt.sliceZ; buildSlices(); }
+        V.dirty = true;
+      }
+      if (Number.isFinite(view.sliceZ)) { V.opt.sliceZ = view.sliceZ; $("#sliceZ").value = view.sliceZ; buildSlices(); updateLegend(); }
+      const saved = obj.results && obj.results.torque_mNm, now = resultsSummary(sol).torque_mNm;
+      setStatus(`Opened "${obj.name || "project"}".` + (Number.isFinite(saved) ? ` Saved torque ${saved} mN·m, recomputed ${now} mN·m.` : ""));
+    });
+  }
+}
+function syncViewControls() {
+  $("#oVolume").checked = V.opt.volume; $("#oLines").checked = V.opt.lines; $("#oPcb").checked = V.opt.pcb; $("#oBack").checked = V.opt.back; $("#oCut").checked = V.opt.cut;
+  $("#oDensity").value = V.opt.density; $("#oThr").value = V.opt.thr;
+  for (const [attr, key] of [["data-slice", "slice"], ["data-sfield", "sliceField"], ["data-rotor", "rotor"]])
+    document.querySelectorAll(`[${attr}]`).forEach(b => b.setAttribute("aria-pressed", b.getAttribute(attr) === V.opt[key]));
+  buildSlices(); updateLegend(); V.dirty = true;
+}
+const safeName = s => (s || "motor").replace(/[^\w\-. ]+/g, "").trim().replace(/\s+/g, "-").slice(0, 60) || "motor";
+
+/* ---- downloads capability (viewer confirms every save) ---- */
+let dlPromise = null;
+// Self-hosted copies have no claude.ai viewer, so they fall back to an ordinary browser download.
+const LOCAL_DOWNLOADS = {
+  async save({ filename, data }) {
+    const url = URL.createObjectURL(data instanceof Blob ? data : new Blob([data]));
+    const a = document.createElement("a"); a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+};
+function getDownloads() {
+  if (!dlPromise) dlPromise = (window.claude && typeof window.claude.use === "function")
+    ? window.claude.use("downloads").catch(() => null)
+    : Promise.resolve(LOCAL_DOWNLOADS);
+  return dlPromise;
+}
+async function saveFile(filename, data) {
+  const dl = await getDownloads();
+  if (!dl) { setStatus("Saving files isn't available in this view. Open the published page to save.", true); return false; }
+  try { await dl.save({ filename, data }); setStatus(`Saved ${filename}.`); return true; }
+  catch (e) {
+    const c = e && e.code;
+    if (c === "declined") setStatus("Save cancelled.");
+    else if (c === "rate_limited") setStatus("A save prompt is already open. Finish that one first.", true);
+    else setStatus(`Couldn't save the file (${c || e.message || e}).`, true);
+    return false;
+  }
+}
+
+/* ---- browser library (this browser only) ---- */
+function libRead() { try { const a = JSON.parse(localStorage.getItem(LIB_KEY) || "[]"); return Array.isArray(a) ? a : []; } catch { return []; } }
+function libWrite(a) { try { localStorage.setItem(LIB_KEY, JSON.stringify(a)); return true; } catch { setStatus("This browser wouldn't store the project. Save it as a file instead.", true); return false; } }
+function renderLibrary() {
+  const a = libRead(), el = $("#library");
+  if (!a.length) { el.innerHTML = `<p class="muted small" style="margin:6px 0 0">Nothing saved in this browser yet.</p>`; return; }
+  const rows = a.map((p, i) => {
+    const r = p.results || {}, d = new Date(p.savedAt);
+    return `<tr><td><button class="linkish" data-lib-open="${i}" title="Open and recompute">${esc(p.name)}</button><div class="muted small">${isNaN(d) ? "" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " · "}μᵣ ${getPath(p, "design.rotor.mu_r") ?? "–"}, gap ${getPath(p, "design.rotor.airGap_mm") ?? "–"} mm</div></td>
+      <td>${Number.isFinite(r.torque_mNm) ? r.torque_mNm.toFixed(3) + " mN·m" : '<span class="muted">not solved</span>'}<div class="muted small">${Number.isFinite(r.gapBzMean_mT) ? r.gapBzMean_mT.toFixed(2) + " mT gap" : ""}</div></td>
+      <td><button class="small" data-lib-del="${i}" aria-label="Delete ${esc(p.name)}">✕</button></td></tr>`;
+  }).join("");
+  el.innerHTML = `<table class="lib">${rows}</table>`;
+  el.querySelectorAll("[data-lib-open]").forEach(b => b.onclick = () => { const p = libRead()[+b.dataset.libOpen]; if (p) applyProject(p).catch(e => setStatus(e.message, true)); });
+  el.querySelectorAll("[data-lib-del]").forEach(b => b.onclick = () => {
+    const a = libRead(), p = a[+b.dataset.libDel]; if (!p) return;
+    if (!confirm(`Delete "${p.name}" from this browser?`)) return;
+    a.splice(+b.dataset.libDel, 1); libWrite(a); renderLibrary();
+  });
+}
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+/* ---- model export: OBJ + STL + SVG + project, packed as a zip ---- */
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_T[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function makeZip(files) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  let off = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name), data = typeof f.data === "string" ? enc.encode(f.data) : f.data, crc = crc32(data);
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(8, 0, true); h.setUint16(12, 33, true);
+    h.setUint32(14, crc, true); h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, name.length, true);
+    parts.push(h.buffer, name, data);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(14, 33, true);
+    c.setUint32(16, crc, true); c.setUint32(20, data.length, true); c.setUint32(24, data.length, true); c.setUint16(28, name.length, true); c.setUint32(42, off, true);
+    central.push(c.buffer, name);
+    off += 30 + name.length + data.length;
+  }
+  const cdSize = central.reduce((s, b) => s + (b.byteLength ?? b.length), 0);
+  const e = new DataView(new ArrayBuffer(22));
+  e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, cdSize, true); e.setUint32(16, off, true);
+  return new Blob([...parts, ...central, e.buffer], { type: "application/zip" });
+}
+function exportMeshes(p) {
+  const g = motorGeom(p), polys = coilPolys(p), P2 = 2 * Math.PI / p.poles, half = p.arc * P2 / 2, th0 = p.theta * Math.PI / 180, out = {};
+  let mb = new MeshB(); rotorSolid(mb, p, g, 0); out.rotor = mb;
+  if (p.back) { mb = new MeshB(); annular(mb, g.Rri, g.Rro, 0, 2 * Math.PI, g.zBB, g.zBT, 0); out.back_plate = mb; }
+  mb = new MeshB(); annular(mb, Math.max(0, p.ri - 3), p.ro + 3, 0, 2 * Math.PI, -g.pcbHalf, g.pcbHalf, 0); out.pcb_substrate = mb;
+  ["A", "B", "C"].forEach((ph, i) => { const m = new MeshB(); for (const q of polys.filter(q => q.ph === i)) { ribbon(m, q.pts, g.pcbHalf + 0.035, 0.34, 0); ribbon(m, q.pts, -g.pcbHalf - 0.035, 0.34, 0); } out["traces_phase_" + ph] = m; });
+  return { out, g, polys };
+}
+function toOBJ(meshes, header) {
+  const L = [header, "# units: millimetres. z is the motor axis; the PCB mid-plane is z = 0.", ""];
+  let base = 1;
+  for (const [name, mb] of Object.entries(meshes)) {
+    const f = mb.f, n = f.length / 6;
+    L.push(`o ${name}`);
+    for (let i = 0; i < n; i++) L.push(`v ${f[6 * i].toFixed(4)} ${f[6 * i + 1].toFixed(4)} ${f[6 * i + 2].toFixed(4)}`);
+    for (let i = 0; i < n; i++) L.push(`vn ${f[6 * i + 3].toFixed(4)} ${f[6 * i + 4].toFixed(4)} ${f[6 * i + 5].toFixed(4)}`);
+    for (let i = 0; i < n; i += 3) { const a = base + i, b = a + 1, c = a + 2; L.push(`f ${a}//${a} ${b}//${b} ${c}//${c}`); }
+    base += n; L.push("");
+  }
+  return L.join("\n");
+}
+function toSTL(mb, name) {
+  const f = mb.f, nt = f.length / 18, buf = new ArrayBuffer(84 + nt * 50), dv = new DataView(buf);
+  const hdr = new TextEncoder().encode(("binary STL, mm: " + name).slice(0, 79)); new Uint8Array(buf, 0, 80).set(hdr);
+  dv.setUint32(80, nt, true);
+  for (let t = 0; t < nt; t++) {
+    const v = k => [f[(3 * t + k) * 6], f[(3 * t + k) * 6 + 1], f[(3 * t + k) * 6 + 2]], a = v(0), b = v(1), c = v(2);
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]], l = Math.hypot(...n) || 1;
+    const o = 84 + t * 50;
+    [n[0] / l, n[1] / l, n[2] / l, ...a, ...b, ...c].forEach((x, i) => dv.setFloat32(o + 4 * i, x, true));
+  }
+  return new Uint8Array(buf);
+}
+function tracesSVG(p, polys) {
+  const R = p.ro + 5, cols = ["#D0453A", "#2E9E5B", "#3569D6"];
+  const paths = polys.map(q => `<path d="M${q.pts.map(([x, y]) => `${x.toFixed(3)},${(-y).toFixed(3)}`).join("L")}Z" stroke="${cols[q.ph]}" data-phase="${"ABC"[q.ph]}"/>`).join("\n    ");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${2 * R}mm" height="${2 * R}mm" viewBox="${-R} ${-R} ${2 * R} ${2 * R}">
+  <!-- Stator copper, one layer, viewed from +z (rotor side). Units: mm. Trace width 0.34 mm, pitch 0.5 mm. Every copper layer uses this pattern with the same winding sense. -->
+  <circle r="${p.ro + 3}" fill="none" stroke="#888" stroke-width="0.15"/>
+  <circle r="${Math.max(0, p.ri - 3)}" fill="none" stroke="#888" stroke-width="0.15"/>
+  <g fill="none" stroke-width="0.34" stroke-linejoin="round">
+    ${paths}
+  </g>
+</svg>`;
+}
+async function exportModel() {
+  let p; try { p = readP(); } catch (e) { setStatus(e.message, true); return; }
+  const proj = currentProject(), { out, g, polys } = exportMeshes(p), base = safeName(proj.name);
+  const files = [
+    { name: `${base}/model.obj`, data: toOBJ(out, `# ${proj.name} — axial-flux reluctance motor, exported ${proj.savedAt}`) },
+    { name: `${base}/rotor.stl`, data: toSTL(out.rotor, proj.name + " rotor") },
+    ...(out.back_plate ? [{ name: `${base}/back_plate.stl`, data: toSTL(out.back_plate, proj.name + " back plate") }] : []),
+    { name: `${base}/stator_traces.svg`, data: tracesSVG(p, polys) },
+    { name: `${base}/project.json`, data: JSON.stringify(proj, null, 2) },
+    { name: `${base}/README.txt`, data: `${proj.name}\n\nmodel.obj           All parts in millimetres, one object per part: rotor, back_plate, pcb_substrate, traces_phase_A/B/C.\nrotor.stl           Rotor for printing: one closed, watertight solid with the poles fused to the yoke.\nback_plate.stl      Back plate below the PCB, if the design has one.\nstator_traces.svg   Copper pattern for one layer, as concentric turns. A real board needs spiral turns and vias between layers.\nproject.json        The design, view and results. Open it in the tool to restore everything.\n\nRotor: ${p.poles} poles, pole arc ${p.arc} of pitch, radius ${g.Rri}–${g.Rro} mm, pole height ${p.tooth} mm, yoke ${p.yoke} mm.\n` }
+  ];
+  await saveFile(`${base}-model.zip`, makeZip(files));
+}
+function hookProjectUI() {
+  $("#projSaveFile").onclick = async () => { let proj; try { proj = currentProject(); } catch (e) { setStatus(e.message, true); return; }
+    await saveFile(`${safeName(proj.name)}.json`, JSON.stringify(proj, null, 2)); };
+  $("#projOpen").onclick = () => $("#projFile").click();
+  $("#projFile").onchange = async e => {
+    const f = e.target.files && e.target.files[0]; e.target.value = ""; if (!f) return;
+    if (f.size > 5e6) { setStatus("That file is too large to be a project file.", true); return; }
+    try { await applyProject(JSON.parse(await f.text())); } catch (err) { setStatus(err instanceof SyntaxError ? "That file isn't valid JSON." : err.message, true); }
+  };
+  $("#projSaveLib").onclick = () => {
+    let proj; try { proj = currentProject(); } catch (e) { setStatus(e.message, true); return; }
+    const a = libRead(), i = a.findIndex(q => q.name === proj.name);
+    if (i >= 0) a[i] = proj; else a.unshift(proj);
+    if (libWrite(a)) { renderLibrary(); setStatus(`Saved "${proj.name}" in this browser${proj.results ? " with its results" : ". Solve first to store results with it"}.`); }
+  };
+  $("#projExport").onclick = exportModel;
+  renderLibrary();
+  getDownloads().then(dl => { for (const id of ["#projSaveFile", "#projExport"]) { $(id).disabled = !dl; $(id).hidden = !dl; }
+    $("#dlNote").hidden = !!dl; });
+}
+
+/* ================= Actions ================= */
+function setStatus(m, err) { const s = $("#status"); s.textContent = m; s.classList.toggle("err", !!err); }
+function setBusy(b) { state.busy = b; state.stop = false; ["#solve", "#sweep", "#vLoop", "#vSphere"].forEach(i => $(i).disabled = b); $("#stop").disabled = !b; }
+function show(sol, keepView) {
+  state.sol = sol;
+  resultPanel(sol); perfPanel(sol); drawP2();
+  try { updateScene(sol, keepView); } catch (e) { console.error(e); setStatus("3D view update failed: " + e.message, true); }
+}
+async function motorSolve(p, quiet) {
+  setStatus("Rasterizing rotor and back plate…");
+  await new Promise(r => setTimeout(r, 0));
+  const job = buildMotor(p), I = phaseCurrents(p);
+  const sol = await solveJob(job, { currents: I });
+  sol.I = I; sol.m = motorMetrics(sol);
+  return sol;
+}
+async function guarded(fn) {
+  setBusy(true);
+  try { await fn(); } catch (e) { console.error(e); setStatus(e.message || String(e), true); }
+  setBusy(false);
+}
+$("#solve").onclick = () => guarded(async () => {
+  const p = readP();
+  const sol = await motorSolve(p);
+  show(sol, false);
+  setStatus(`Solved. Torque ${(sol.m.T.length ? sol.m.T.reduce((a, b) => a + b) / sol.m.T.length * 1e3 : NaN).toFixed(3)} mN·m at γ = ${p.gamma}°.`);
+});
+$("#sweep").onclick = () => guarded(async () => {
+  const base = readP(); state.sweep = { pts: [], base: { ...base, gamma: 0 } }; drawSweep();
+  const t0 = performance.now();
+  for (let g = 0; g <= 180; g += 15) {
+    if (state.stop) break;
+    const sol = await motorSolve({ ...base, gamma: g });
+    const T = sol.m.T.length ? sol.m.T.reduce((a, b) => a + b) / sol.m.T.length : NaN;
+    state.sweep.pts.push([g, T]); drawSweep(); show(sol, state.sweep.pts.length > 1);
+    setStatus(`Sweep: γ = ${g}°, torque ${(T * 1e3).toFixed(3)} mN·m`);
+  }
+  setStatus(`Sweep finished: ${state.sweep.pts.length} solves in ${((performance.now() - t0) / 1000).toFixed(1)} s. The trace field was computed once and reused.`);
+});
+$("#vLoop").onclick = () => guarded(async () => {
+  const job = buildLoop(readP());
+  const sol = await solveJob(job, { currents: [1, 0, 0], skipPCG: true });
+  show(sol); setStatus("Loop test finished.");
+});
+$("#vSphere").onclick = () => guarded(async () => {
+  const job = buildSphere(readP());
+  const sol = await solveJob(job, { uniformH: 1000 });
+  show(sol); setStatus("Sphere test finished.");
+});
+$("#stop").onclick = () => { state.stop = true; };
+window.addEventListener("resize", () => { drawSweep(); drawP2(); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawSweep(); drawP2(); if (state.sol) updateScene(state.sol, true); });
+drawSweep(); drawP2(); hookViewControls(); updateLegend(); hookProjectUI();
+if (navigator.gpu) initRenderer().catch(e => { console.error(e); setStatus("The 3D view could not start: " + e.message, true); });
+if (!navigator.gpu) setStatus("WebGPU isn't available in this browser. Use a recent Chrome or Edge, or Safari 26+.", true);
+</script>
+</body>
+</html>
