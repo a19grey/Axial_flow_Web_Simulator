@@ -8,19 +8,27 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # CI runners have no GPU, so everything here runs on SwiftShader. Fields are still correct, so
+    # the analytic cases are a real check; timings are meaningless and the suites that need a real
+    # GPU (reference comparison, convergence studies) are left to run locally.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
+          cache: npm
+      - run: npm ci
       - run: npx playwright install --with-deps chromium
 
-      # CI runners have no GPU, so every suite runs on SwiftShader. Fields are still correct, so
-      # the analytic cases are a real check; timings in the output are not meaningful and the
-      # reference comparison is skipped because it is far too slow on a software adapter.
+      - name: Module syntax
+        run: |
+          for f in $(git ls-files '*.js'); do node --check "$f" || exit 1; done
+
       - name: Analytic validation cases
+        timeout-minutes: 5
         run: node cli/run.js validate --allow-software --quiet
 
       - name: Full-page smoke test
+        timeout-minutes: 8
         run: node tests/smoke-ui.js --allow-software

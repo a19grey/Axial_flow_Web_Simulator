@@ -74,6 +74,16 @@ export const CHROME_ARGS = [
   "--use-angle=default"
 ];
 
+/* Force the software adapter, to reproduce locally what CI sees on a GPU-less runner. */
+export const CHROME_ARGS_SOFTWARE = [
+  "--enable-unsafe-webgpu",
+  "--enable-unsafe-swiftshader",
+  "--use-angle=swiftshader",
+  "--disable-gpu"
+];
+
+export const chromeArgs = forceSoftware => (forceSoftware ? CHROME_ARGS_SOFTWARE : CHROME_ARGS);
+
 export async function withPage(fn, { allowSoftware = false, quiet = false, page: pageName = "headless.html" } = {}) {
   const chromium = await loadPlaywright();
   const { server, port } = await serve();
