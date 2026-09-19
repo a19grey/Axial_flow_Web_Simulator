@@ -1,8 +1,8 @@
 # Numerics: what was measured
 
-Every figure here came from `node tests/convergence.js` on an Apple M-series GPU (`apple metal-3`)
-via headless Chrome. Regenerate with `npm run test:convergence`; the raw report lands in
-`tests/out/convergence.json`.
+Every figure here was measured on an Apple M-series GPU (`apple metal-3`) via headless Chrome, most
+of them by `node tests/convergence.js`. Regenerate with `npm run test:convergence`; the raw report
+lands in `tests/out/convergence.json`.
 
 ## The scale problem
 
@@ -92,6 +92,29 @@ mid-gap moves 0.65% and does not drift.
 | Old (nearest layer) | 5.890 | 5.778 | 5.744 | 5.872 | 5.759 | 5.903 | 5.884 |
 | New (interpolated) | 5.828 | 5.845 | 5.866 | 5.844 | 5.834 | 5.841 | 5.842 |
 
+## Analytic cases against resolution
+
+Both closed-form cases, solved at a range of grid sizes. The tolerances in `src/core/validate.js`
+are set against these, not chosen to make a particular run pass.
+
+| Grid | Loop, worst on-axis error (tol 1%) | Sphere, cells across | Sphere error (tol 9%) |
+|---|---|---|---|
+| 48 | 0.749% | 12 | 11.07% — fails |
+| 64 | 0.413% | 16 | 8.48% |
+| 80 | 0.258% | 20 | 7.73% |
+| 96 | 0.173% | 24 | 6.51% |
+| 128 | 0.088% | 32 | 5.22% |
+
+The loop case is pure Biot-Savart with no material response, and converges at close to second order:
+halving the cell size roughly quarters the error. The sphere case converges at closer to first
+order, because a staircased sphere on a Cartesian grid has a boundary error that falls only as the
+cell size. That is the case's whole point — the interior field amplifies an error in the
+demagnetizing factor by roughly μᵣ/3, so it is the most sensitive probe available of the material
+response, and of the reduced-potential ceiling.
+
+CI runs this at grid 80, which clears both tolerances with margin and is four times less work than
+the default 128 — SwiftShader needs that.
+
 ## Solver
 
 Jacobi-preconditioned conjugate gradients, f32, residual read back once per 32 iterations.
@@ -112,9 +135,11 @@ ran out at 4.2 M cells, and at 256 threads the CG kernels at 16.7 M. Past those 
 was rejected and the solve returned a field of zeros — a confident torque of 0.00000, produced
 faster than a correct run.
 
-Every cell-wide kernel now dispatches a 2D workgroup grid and linearises the index itself, and the
-device's `uncapturederror` events are latched and raised so a rejected dispatch fails loudly. The
-convergence suite carries a regression for this: a 14 M-cell solve must return a real answer.
+Every cell-wide kernel now dispatches a 2D workgroup grid and linearises the index itself, and each
+solve runs inside `pushErrorScope` / `popErrorScope` so a rejected dispatch fails loudly and is
+attributed to the pass that caused it — a global latch would let an unrelated renderer failure
+surface as a solver error. The convergence suite carries a regression for this: a 14 M-cell solve
+must return a real answer.
 
 ## What runs where
 

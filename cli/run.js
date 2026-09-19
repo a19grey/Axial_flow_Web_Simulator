@@ -84,10 +84,10 @@ export const CHROME_ARGS_SOFTWARE = [
 
 export const chromeArgs = forceSoftware => (forceSoftware ? CHROME_ARGS_SOFTWARE : CHROME_ARGS);
 
-export async function withPage(fn, { allowSoftware = false, quiet = false, page: pageName = "headless.html" } = {}) {
+export async function withPage(fn, { allowSoftware = false, forceSoftware = false, quiet = false, page: pageName = "headless.html" } = {}) {
   const chromium = await loadPlaywright();
   const { server, port } = await serve();
-  const browser = await chromium.launch({ args: CHROME_ARGS });
+  const browser = await chromium.launch({ args: chromeArgs(forceSoftware) });
   try {
     const page = await browser.newPage();
     page.on("console", m => { if (!quiet && m.type() === "error") process.stderr.write(`[page] ${m.text()}\n`); });
@@ -233,6 +233,7 @@ const USAGE = `axial-flux headless driver
   --set design.rotor.airGap_mm=2.5     override any spec field, repeatable
   -o out.json                          write the result JSON to a file as well as stdout
   --allow-software                     proceed on a software WebGPU adapter (timings meaningless)
+  --force-software                     use the software adapter deliberately, to reproduce CI locally
   --quiet                              no progress on stderr
 `;
 
@@ -245,7 +246,7 @@ async function main() {
   }
   const { result, caps } = await withPage(
     (page) => COMMANDS[cmd](page, args),
-    { allowSoftware: !!args["allow-software"], quiet: !!args.quiet }
+    { allowSoftware: !!args["allow-software"], forceSoftware: !!args["force-software"], quiet: !!args.quiet }
   );
   endProgress();
 
