@@ -112,8 +112,16 @@ cell size. That is the case's whole point — the interior field amplifies an er
 demagnetizing factor by roughly μᵣ/3, so it is the most sensitive probe available of the material
 response, and of the reduced-potential ceiling.
 
-CI runs this at grid 80, which clears both tolerances with margin and is four times less work than
-the default 128 — SwiftShader needs that.
+CI runs this at grid 80. Wall time for the whole analytic suite on a software adapter, which is
+what a runner has:
+
+| Grid | 64 | 80 | 96 | 128 |
+|---|---|---|---|---|
+| Local SwiftShader | 16 s | 36 s | 75 s | ~190 s |
+| GitHub runner | — | — | — | over 300 s, timed out |
+
+Grid 48 is the first that fails, so 64 is the floor and 80 leaves a margin on both the tolerance
+and the clock.
 
 ## Solver
 
