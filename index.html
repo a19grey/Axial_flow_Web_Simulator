@@ -117,7 +117,13 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
 
 <main class="layout">
   <aside class="panel" aria-label="Model parameters">
-    <h2>Stator PCB</h2>
+    <div class="actions" style="margin-top:0">
+      <button id="solve" class="primary">Solve</button>
+      <button id="sweep">Sweep current angle γ</button>
+      <button id="stop" disabled>Stop</button>
+    </div>
+    <div id="status" class="status" role="status"></div>
+    <h2 style="margin-top:16px">Stator PCB</h2>
     <div class="pair">
       <div><label for="poles">Rotor poles</label>
         <select id="poles"><option value="4" selected>4 poles · 6 coils</option><option value="6">6 poles · 9 coils</option><option value="8">8 poles · 12 coils</option></select></div>
@@ -167,14 +173,14 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
     <p class="muted small" style="margin:4px 0 0">Neither enters the field solve. Speed sets the electrical frequency for core loss; temperature sets the copper resistivity.</p>
     <h2 style="margin-top:16px">Mesh</h2>
     <div class="seg" role="group" aria-label="Mesh mode" style="margin-bottom:6px">
-      <button data-mesh="uniform" aria-pressed="true">Uniform</button><button data-mesh="graded" aria-pressed="false">Graded</button><button data-mesh="cylindrical" aria-pressed="false">Cylindrical</button>
+      <button data-mesh="uniform" aria-pressed="false">Uniform</button><button data-mesh="graded" aria-pressed="false">Graded</button><button data-mesh="cylindrical" aria-pressed="true">Cylindrical</button>
     </div>
-    <div id="meshUniform">
+    <div id="meshUniform" hidden>
       <label for="grid">Cells across the whole box</label>
       <select id="grid"><option value="96">96 (fast)</option><option value="128" selected>128</option><option value="160">160</option><option value="200">200</option><option value="256">256</option><option value="320">320</option></select>
       <p class="muted small" style="margin:6px 0 0">One cell size everywhere, including the far field. Fine for a small machine; a large one with a thin gap needs far too many cells this way.</p>
     </div>
-    <div id="meshGraded" hidden>
+    <div id="meshGraded">
       <div class="pair">
         <div><label for="mActive">Cells across machine</label><input id="mActive" type="number" value="160" min="16" step="10"></div>
         <div><label for="mGap">Cells across air gap</label><input id="mGap" type="number" value="6" min="1" step="1"></div>
@@ -191,21 +197,16 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
         <div><label for="mGrowth">Max growth ratio</label><input id="mGrowth" type="number" value="1.2" min="1.02" max="3" step="0.02"></div>
         <div><label for="mFar">Far-field coarsening</label><input id="mFar" type="number" value="8" min="1" max="64" step="1"></div>
       </div>
-      <div id="meshCylOnly" hidden>
+      <div id="meshCylOnly">
         <div class="pair">
-          <div><label for="mArc">Cells per pole pitch</label><input id="mArc" type="number" value="24" min="4" step="2"></div>
+          <div><label for="mArc">Cells per pole pitch</label><input id="mArc" type="number" value="64" min="4" step="2"></div>
           <div><label for="mSector" style="margin-bottom:6px">One pole pair only</label><input id="mSector" type="checkbox" checked style="width:auto"></div>
         </div>
       </div>
-      <p id="meshNoteGraded" class="muted small" style="margin:6px 0 0">Cells are spent where the field varies and stretched into the far field. Material interfaces land exactly on cell faces, so the air gap is never averaged away.</p>
-      <p id="meshNoteCyl" class="muted small" style="margin:6px 0 0" hidden>Meshed in (r, θ, z), the coordinates the machine is built in. The bore, the rim and the pole arcs are cell faces, so material fractions are exact rather than staircased, and one pole pair can stand in for the whole machine.</p>
+      <p id="meshNoteGraded" class="muted small" style="margin:6px 0 0" hidden>Cells are spent where the field varies and stretched into the far field. Material interfaces land exactly on cell faces, so the air gap is never averaged away.</p>
+      <p id="meshNoteCyl" class="muted small" style="margin:6px 0 0">Meshed in (r, θ, z), the coordinates the machine is built in. The bore, the rim and the pole arcs are cell faces, so material fractions are exact rather than staircased, and one pole pair can stand in for the whole machine.</p>
     </div>
     <div id="meshPlan" class="muted small" style="margin-top:10px;min-height:34px"></div>
-    <div class="actions">
-      <button id="solve" class="primary">Solve</button>
-      <button id="sweep">Sweep current angle γ</button>
-      <button id="stop" disabled>Stop</button>
-    </div>
     <details>
       <summary>Cross-checks and characterization</summary>
       <div class="actions">
@@ -223,7 +224,6 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
       </div>
       <p class="muted" style="font-size:12px;margin:8px 0 0">The sphere test uses the rotor μᵣ above. The analytic interior field is 3μᵣ/(μᵣ+2) · μ₀H₀.</p>
     </details>
-    <div id="status" class="status" role="status"></div>
   </aside>
 
   <section class="views" aria-label="3D view">

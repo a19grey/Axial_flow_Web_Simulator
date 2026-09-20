@@ -62,12 +62,12 @@ export function syncDualSided() {
 }
 
 /* Mesh mode is a segmented control rather than an input, so it is held here. */
-export const meshMode = { value: "uniform" };
+export const meshMode = { value: defaultSpec().mesh.mode };
 
 export const MESH_MODES = ["uniform", "graded", "cylindrical"];
 
 export function setMeshMode(mode) {
-  meshMode.value = MESH_MODES.includes(mode) ? mode : "uniform";
+  meshMode.value = MESH_MODES.includes(mode) ? mode : defaultSpec().mesh.mode;
   const v = meshMode.value, cyl = v === "cylindrical";
   document.querySelectorAll("[data-mesh]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mesh === v)));
   const show = (id, on) => { const el = $(id); if (el) el.hidden = !on; };

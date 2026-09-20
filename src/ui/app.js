@@ -6,9 +6,9 @@
  */
 
 import { $, ui, setStatus, setBusy, requestStop, guarded } from "./dom.js";
-import { readSpec, setMeshMode, syncDualSided, CONTROLS, SPEC_CHANGED } from "./controls.js";
+import { readSpec, heldSpec, setMeshMode, syncDualSided, announceSpecChange, CONTROLS, SPEC_CHANGED } from "./controls.js";
 import { perfPanel, resultPanel, qualityPanel, crossPanel } from "./panels.js";
-import { drawSweep, drawAngleSweep, drawP2 } from "./plots.js";
+import { drawSweep, drawAngleSweep, drawP2, sin2Fit } from "./plots.js";
 import { hookProjectUI, setSolveHook } from "./project.js";
 import { initRenderer, updateScene, updateLegend, hookViewControls } from "../render/renderer.js";
 import { solveMotor, plan, virtualWork, inductance, torqueVsAngle } from "../core/api.js";
@@ -48,11 +48,20 @@ async function solveCurrent(signal, keepView = false) {
 }
 setSolveHook(signal => solveCurrent(signal, false));
 
-$("#solve").onclick = () => guarded(async signal => {
+const solveAction = () => guarded(async signal => {
   const sol = await solveCurrent(signal);
   const res = resultsSummary(sol);
   setStatus(`Solved. Torque ${fmtTorque(res)} mN·m at γ = ${sol.spec.operatingPoint.currentAngle_elecDeg}°.`);
 });
+$("#solve").onclick = solveAction;
+
+/* Sweep the current angle, then solve once more at the peak the fit predicts.
+ *
+ * The sweep is on a 15° grid, so the best sampled point can be up to 7.5° from the true optimum,
+ * and the sin 2γ fit locates it far better than the grid does. One extra solve turns the fitted
+ * peak from a drawn curve into a computed operating point, and leaves the page showing the machine
+ * at its best current angle rather than at 180°, which is where the sweep happens to end. */
+const sweepMean = sol => (sol.m.T.length ? sol.m.T.reduce((a, b) => a + b, 0) / sol.m.T.length : NaN);
 
 $("#sweep").onclick = () => guarded(async signal => {
   const base = readSpec();
@@ -60,18 +69,40 @@ $("#sweep").onclick = () => guarded(async signal => {
   ui.angle = null;
   drawSweep();
   const t0 = performance.now();
-  for (let g = 0; g <= 180; g += 15) {
-    if (signal.aborted) break;
+  const at = async g => {
     const variant = JSON.parse(JSON.stringify(base));
     variant.operatingPoint.currentAngle_elecDeg = g;
-    const sol = await solveMotor(variant, { onProgress, signal });
-    const T = sol.m.T.length ? sol.m.T.reduce((a, b) => a + b, 0) / sol.m.T.length : NaN;
+    return solveMotor(variant, { onProgress, signal });
+  };
+  for (let g = 0; g <= 180; g += 15) {
+    if (signal.aborted) break;
+    const sol = await at(g);
+    const T = sweepMean(sol);
     ui.sweep.pts.push([g, T]);
     drawSweep();
     show(sol, ui.sweep.pts.length > 1);
     setStatus(`Sweep: γ = ${g}°, torque ${(T * 1e3).toFixed(4)} mN·m`);
   }
-  setStatus(`Sweep finished: ${ui.sweep.pts.length} solves in ${((performance.now() - t0) / 1000).toFixed(1)} s. The trace field was computed once and reused.`);
+  const elapsed = () => ((performance.now() - t0) / 1000).toFixed(1);
+  if (signal.aborted) { setStatus(`Sweep stopped after ${ui.sweep.pts.length} solves.`); return; }
+
+  const fit = sin2Fit(ui.sweep.pts);
+  if (!Number.isFinite(fit.peak)) {
+    setStatus(`Sweep finished: ${ui.sweep.pts.length} solves in ${elapsed()} s. The fit was degenerate, so no peak was confirmed.`);
+    return;
+  }
+  const gPeak = +fit.peak.toFixed(2);
+  setStatus(`Sweep done in ${elapsed()} s. Confirming the fitted peak at γ = ${gPeak}°…`);
+  const sol = await at(gPeak);
+  const T = sweepMean(sol);
+  ui.sweep.peak = { gamma_deg: gPeak, torque_mNm: T * 1e3, fitted_mNm: fit.amp * 1e3 };
+  drawSweep();
+  show(sol, true);
+  // Leave the form on the angle that is being displayed, so pressing Solve reproduces this result.
+  const box = $("#gamma");
+  if (box) { box.value = String(gPeak); announceSpecChange(); }
+  const missPct = fit.amp ? Math.abs(T - fit.amp) / Math.abs(fit.amp) * 100 : 0;
+  setStatus(`Sweep finished: ${ui.sweep.pts.length + 1} solves in ${elapsed()} s. Peak torque ${(T * 1e3).toFixed(4)} mN·m at γ = ${gPeak}°, ${missPct.toFixed(1)}% from the sin 2γ fit. The view is showing that solve.`);
 });
 
 $("#vLoop").onclick = () => guarded(async signal => {
@@ -166,17 +197,29 @@ onDeviceLost(info => setStatus(`The GPU device was lost (${info.message}). Try a
 
 drawSweep();
 drawP2();
-setMeshMode("uniform");
+setMeshMode(heldSpec().mesh.mode);
 syncDualSided();
 hookViewControls();
 updateLegend();
 hookProjectUI();
 setBusy(false);
 
+/* The page solves its default design as soon as it can, so the first thing seen is a field and a
+ * torque rather than an empty view and a button. It is one ordinary solve through the same handler
+ * the button uses, it can be stopped like any other, and ?autosolve=0 suppresses it — which is what
+ * a test driver wants when it is about to set up a mesh of its own. */
+const AUTO_SOLVE = new URLSearchParams(location.search).get("autosolve") !== "0";
+
 if (!navigator.gpu) {
   setStatus("WebGPU isn't available in this browser. Use a recent Chrome or Edge, or Safari 26+.", true);
 } else {
   initGPU().then(G => { ui.adapterName = G.name; }).catch(() => {});
   refreshPlan();
-  initRenderer().catch(e => { console.error(e); setStatus("The 3D view could not start: " + e.message, true); });
+  initRenderer()
+    .catch(e => { console.error(e); setStatus("The 3D view could not start: " + e.message, true); })
+    .then(() => {
+      if (!AUTO_SOLVE || ui.busy) return;
+      setStatus("Solving the default design\u2026 press Stop to interrupt, or change anything and solve again.");
+      return solveAction();
+    });
 }

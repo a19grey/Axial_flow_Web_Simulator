@@ -59,6 +59,28 @@ export function drawAngleSweep(r) {
              { pts: closed, color: css("--gpu"), label: "GPU solve per position" }] });
 }
 
+/* Least-squares fit of T = A sin2γ + B cos2γ to a current-angle sweep.
+ *
+ * Reluctance torque follows sin 2γ to first order, so two coefficients describe the whole sweep.
+ * The fit is unit-agnostic — it is used on mN·m here for the plot and on N·m by the sweep action —
+ * and the peak angle does not depend on either. Written as T = R cos(2γ − φ) with φ = atan2(A, B),
+ * the maximum sits at γ = φ/2, folded into [0, 180) because γ has an electrical period of 180°.
+ */
+export function sin2Fit(pts) {
+  let a = 0, b = 0, ss = 0, cc = 0, sc = 0;
+  for (const [g, T] of pts) {
+    const s = Math.sin(2 * g * Math.PI / 180), c = Math.cos(2 * g * Math.PI / 180);
+    a += T * s; b += T * c; ss += s * s; cc += c * c; sc += s * c;
+  }
+  const det = ss * cc - sc * sc;
+  const A = det ? (a * cc - b * sc) / det : 0, B = det ? (b * ss - a * sc) / det : 0;
+  return {
+    A, B, amp: Math.hypot(A, B),
+    peak: det ? ((Math.atan2(A, B) * 180 / Math.PI) / 2 + 180) % 180 : NaN,
+    at: g => A * Math.sin(2 * g * Math.PI / 180) + B * Math.cos(2 * g * Math.PI / 180)
+  };
+}
+
 export function drawSweep() {
   const sw = ui.sweep, cv = $("#sweepPlot");
   // The rotor-angle plot owns the canvas until a current-angle sweep replaces it.
@@ -67,15 +89,24 @@ export function drawSweep() {
   if (title && !ui.angle) title.innerHTML = `Torque vs current angle <span class="muted" style="font-weight:400">— reluctance torque should follow sin 2γ</span>`;
   if (!sw || !sw.pts.length) { drawPlot(cv, { xr: [0, 180], yr: [-1, 1], xticks: niceTicks(0, 180, 6), yticks: niceTicks(-1, 1), xfmt: v => v + "°", yfmt: v => v, xlabel: "current angle γ (electrical)", ylabel: "torque (mN·m)", series: [] }); return; }
   const pts = sw.pts.map(([g, T]) => [g, T * 1e3]);
-  let a = 0, b = 0, ss = 0, cc = 0, sc = 0;
-  for (const [g, T] of pts) { const s = Math.sin(2 * g * Math.PI / 180), c = Math.cos(2 * g * Math.PI / 180); a += T * s; b += T * c; ss += s * s; cc += c * c; sc += s * c; }
-  const det = ss * cc - sc * sc, A = det ? (a * cc - b * sc) / det : 0, Bc = det ? (b * ss - a * sc) / det : 0;
-  const fit = []; for (let g = 0; g <= 180; g += 2) fit.push([g, A * Math.sin(2 * g * Math.PI / 180) + Bc * Math.cos(2 * g * Math.PI / 180)]);
-  const ymax = Math.max(1e-6, ...pts.map(p => Math.abs(p[1])), ...fit.map(p => Math.abs(p[1]))) * 1.15;
-  sw.fit = { amp: Math.hypot(A, Bc), peak: ((Math.atan2(A, Bc) * 180 / Math.PI) / 2 + 180) % 180 };
+  const f = sin2Fit(pts);
+  const fit = []; for (let g = 0; g <= 180; g += 2) fit.push([g, f.at(g)]);
+  sw.fit = { amp: f.amp, peak: f.peak };
+  /* The confirming solve at the fitted peak, once it has run. It is drawn as its own series rather
+   * than folded into the sweep, because it is the one point the fit predicted instead of one the
+   * fit was made from: how far it sits off the curve is the only check the fit gets. */
+  const peak = sw.peak ? [[sw.peak.gamma_deg, sw.peak.torque_mNm]] : [];
+  const ymax = Math.max(1e-6, ...pts.map(p => Math.abs(p[1])), ...fit.map(p => Math.abs(p[1])),
+                        ...peak.map(p => Math.abs(p[1]))) * 1.15;
+  const series = [
+    { pts: fit, color: css("--muted"), label: `sin 2γ fit, peak ${f.amp.toFixed(2)} mN·m at ${f.peak.toFixed(0)}°` },
+    { pts, style: "dots", color: css("--gpu"), label: "GPU solve" }
+  ];
+  if (peak.length) series.push({ pts: peak, style: "dots", color: css("--good"),
+    label: `solved at the peak: ${sw.peak.torque_mNm.toFixed(2)} mN·m at ${sw.peak.gamma_deg.toFixed(1)}°` });
   drawPlot(cv, { xr: [0, 180], yr: [-ymax, ymax], xticks: niceTicks(0, 180, 6), yticks: niceTicks(-ymax, ymax),
     xfmt: v => v + "°", yfmt: v => Math.abs(ymax) < 1 ? v.toFixed(2) : v.toFixed(1), xlabel: "current angle γ (electrical)", ylabel: "torque (mN·m)",
-    series: [{ pts: fit, color: css("--muted"), label: `sin 2γ fit, peak ${sw.fit.amp.toFixed(2)} mN·m at ${sw.fit.peak.toFixed(0)}°` }, { pts, style: "dots", color: css("--gpu"), label: "GPU solve" }] });
+    series });
 }
 export function drawP2() {
   const sol = ui.sol, cv = $("#p2");

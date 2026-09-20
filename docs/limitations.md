@@ -47,8 +47,9 @@ the materials most worth saturating are also the ones past it until the formulat
 
 ## Cartesian modes: in-plane boundaries are staircased
 
-*Fixed by `mesh.mode: "cylindrical"`, which is now the default for both presets. This section
-describes the Cartesian modes, which are kept for cross-checking and for non-annular geometry.*
+*Fixed by `mesh.mode: "cylindrical"`, which is now the default everywhere — in the presets, on a
+fresh page, and for any spec that does not name a mode. This section describes the Cartesian modes,
+which are kept for cross-checking and for non-annular geometry.*
 
 Grading removes the z-direction staircase completely, because the interfaces that matter there — the
 PCB faces, the pole face, the yoke, the back plate — are planes, and the mesh generator makes every

@@ -126,6 +126,10 @@ async function runSplit(page, designIn) {
   const overrides = Object.entries(design)
     .filter(([k]) => FIELDS[k])
     .map(([k, v]) => [FIELDS[k][1], v]);
+  // The reference build had one grid: a single cell size everywhere. The default mesh is now
+  // cylindrical, so the regression asks for the uniform mesh explicitly rather than relying on a
+  // default that is deliberately no longer uniform.
+  overrides.unshift(["mesh.mode", "uniform"]);
   const r = await page.evaluate(async (ov) => {
     const spec = window.AFS.defaultSpec();
     for (const [p, v] of ov) window.AFS.setPathOn(spec, p, v);

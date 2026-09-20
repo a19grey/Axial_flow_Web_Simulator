@@ -32,6 +32,7 @@ import { freeSpaceInductance } from "../src/core/metrics.js";
 import { makeMesh, volumeM, CYLINDRICAL } from "../src/core/mesh.js";
 import { MU0 } from "../src/core/constants.js";
 import { normalizeSpec, specToParams } from "../src/core/spec.js";
+import { sin2Fit } from "../src/ui/plots.js";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
@@ -140,6 +141,24 @@ function cpuChecks() {
        `${worst.toExponential(2)}%`);
   }
   report.cases.rasterization = rasterRows;
+
+  /* The current-angle sweep solves on a 15° grid and then solves once more at the peak of a
+   * sin 2γ fit, so the fit has to find a peak the grid does not contain. Sampled from an exact
+   * sin 2(γ − φ) on that same grid, it must recover φ + 45° to round-off — a peak that lands
+   * between two sampled angles is the case that matters. */
+  process.stderr.write("\n3. the sin 2\u03b3 fit behind the sweep\n");
+  const fitRows = [];
+  for (const phase of [0, 7, 31, 88, 143]) {
+    const pts = [];
+    for (let g = 0; g <= 180; g += 15) pts.push([g, 3e-4 * Math.sin(2 * (g - phase) * Math.PI / 180)]);
+    const f = sin2Fit(pts);
+    const want = (phase + 45) % 180;
+    const err = Math.abs(((f.peak - want + 270) % 180) - 90);
+    fitRows.push({ phase_deg: phase, peak_deg: f.peak, expected_deg: want, error_deg: err, amp: f.amp });
+    ok(`sin 2γ fit finds the peak of a ${phase}°-shifted sweep`,
+       err < 1e-6 && rel(f.amp, 3e-4) < 1e-6, `${f.peak.toFixed(4)}° against ${want}°`);
+  }
+  report.cases.sin2Fit = fitRows;
 }
 
 /* ---- checks that need the solver ---------------------------------------------------------------- */

@@ -37,6 +37,13 @@ axialflow/
 file under `src/`, reload the page, and the change is live (the dev server sends `no-store`). Use a
 recent Chrome or Edge, or Safari 26+.
 
+The page solves its default design as soon as it loads, so it opens on a field and a torque rather
+than on an empty view; Stop interrupts it like any other solve, and `index.html?autosolve=0` turns
+it off for a driver that wants to set the design up first. **Sweep current angle γ** walks γ from 0
+to 180° in 15° steps, fits sin 2γ, and then solves once more at the peak that fit predicts — which
+is usually between two sampled angles — leaving the page showing the machine at its best current
+angle and the form set to it.
+
 **Run the tests:**
 
     npm test               # every suite, ~55 s
@@ -101,10 +108,11 @@ Every numeric field carries its unit in its name.
   },
   "operatingPoint": { "rotorAngle_deg": 0, "currentAngle_elecDeg": 45,
                       "speed_rpm": 0, "windingTemperature_C": 20 },
-  "mesh":   { "mode": "graded",
+  "mesh":   { "mode": "cylindrical",
               "activeCellsAcrossDiameter": 160, "cellsAcrossAirGap": 6,
               "cellsAcrossPoleHeight": 4, "cellsAcrossYoke": 3, "cellsAcrossPcb": 4,
               "cellsAcrossBackPlate": 3, "cellsAcrossBackGap": 2,
+              "cellsAcrossPoleArc": 64, "sector": true,
               "growthRatio": 1.2, "farFieldCellFactor": 8, "maxCells": 40000000,
               "marginFactor": 0.4, "marginMin_mm": 12 },
   "solver": { "tolerance": 1e-5, "maxIterations": 4000, "checkInterval": 32, "stallPatience": 6 }
@@ -260,7 +268,9 @@ reason, rather than returning a number it cannot justify.
 
 Three modes. `uniform` is the original single-cell-size grid, kept for cross-checking. `graded`
 sizes each Cartesian axis from the geometry. `cylindrical` meshes in (r, θ, z) — the coordinates the
-machine is actually built in — and is the default for both presets.
+machine is actually built in — and is the default: for the presets, for a fresh page, and for any
+spec that does not name a mode. A version 1 project file still migrates to `uniform`, which is what
+it was solved with.
 
 ### Why cylindrical
 
@@ -325,8 +335,10 @@ right. Refining either one alone cannot say that.
 **Tuning a cylindrical mesh.** The knob that most often limits it is `cellsAcrossPoleArc`. Radial
 and axial resolution look generous while the angular cells stay long and the pole edges smear —
 `plan()` measures the arc length at the rim against the radial cell size and says so when they drift
-apart. The near-axis aspect ratio always reads high; that is inherent to the coordinate system, the
-bore holds few cells and little field, and it is not worth chasing.
+apart. The default is 64 per pole pitch, chosen so that the default machine's angular cell is
+comparable to its radial one rather than five times longer. The near-axis aspect ratio always reads
+high; that is inherent to the coordinate system, the bore holds few cells and little field, and it
+is not worth chasing.
 
 ## Numerics
 
@@ -383,9 +395,9 @@ antisymmetric between 45° and 135°, and the two stress surfaces agree.
 |---|---|
 | `analytic` | the closed-form cases above |
 | `reference` | *(needs a GPU)* every design matches the frozen pre-split single-file build to 1e-9 relative |
-| `ui` | the real page: solve, both validation buttons, project round-trip, v1 migration, model export, graded meshing, view controls, and no console errors |
+| `ui` | the real page: the solve it runs by itself on load, both validation buttons, project round-trip, v1 migration, model export, graded meshing, the current-angle sweep and its confirming solve at the fitted peak, view controls, and no console errors |
 | `convergence` | *(needs a GPU)* the answer stops moving under refinement; grading beats uniform per cell; a periodic sector reproduces the full turn exactly; cylindrical and Cartesian agree on a converged answer; the 370 mm case runs; a 14 M-cell solve returns a real answer rather than zeros |
-| `metrics` | *(GPU for half of it)* loop self-inductance against its closed form; cylindrical cell volumes tiling an annulus exactly; rasterized region volumes against exact ones; the winding period derived rather than assumed; Maxwell stress against virtual work; reciprocity of the inductance matrix and its convergence; stored energy two ways; the two rotors of a dual-sided machine; skew trading ripple for torque |
+| `metrics` | *(GPU for half of it)* loop self-inductance against its closed form; cylindrical cell volumes tiling an annulus exactly; rasterized region volumes against exact ones; the winding period derived rather than assumed; the sin 2γ fit recovering a peak the sweep grid does not contain; Maxwell stress against virtual work; reciprocity of the inductance matrix and its convergence; stored energy two ways; the two rotors of a dual-sided machine; skew trading ripple for torque |
 
 `tests/reference/axial-flux-3d-webgpu.html` is the original single-file build, kept so the
 regression is reproducible indefinitely. `tests/compare-reference.js` drives it through its own

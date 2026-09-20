@@ -58,7 +58,11 @@ async function main() {
     });
     page.on("pageerror", e => { problems.push("page error: " + e.message); process.stderr.write(`  [pageerror] ${e.message}\n`); });
 
-    await page.goto(`http://127.0.0.1:${port}/index.html`, { waitUntil: "load" });
+    /* autosolve=0: the page would otherwise start solving its default design the moment it loads,
+     * which is the right behaviour for a person and the wrong one for a driver that is about to
+     * replace the mesh with something small enough to run on a software adapter. The autosolve
+     * itself is checked at the end, on a page of its own. */
+    await page.goto(`http://127.0.0.1:${port}/index.html?autosolve=0`, { waitUntil: "load" });
     await page.waitForFunction("window.AFS && window.AFS.ready", null, { timeout: 30000 });
     await page.evaluate(() => { window.shrinkSpec = s => (window.__tinyMesh ? { ...s, mesh: { ...s.mesh, ...window.__tinyMesh } } : s); });
 
@@ -252,7 +256,7 @@ async function main() {
     /* ---- graded mesh through the interface ---------------------------------------------------- */
     const graded = await page.evaluate(async () => {
       const readPlan = () => document.getElementById("meshPlan").textContent;
-      const uniformPlan = readPlan();
+      const beforePlan = readPlan();
       document.querySelector("[data-mesh='graded']").click();
       await new Promise(r => setTimeout(r, 500));
       const gradedPlan = readPlan();
@@ -265,7 +269,7 @@ async function main() {
       await new Promise(r => { const t = setInterval(() => { if (!document.getElementById("solve").disabled) { clearInterval(t); r(); } }, 50); });
       const spec = window.AFS.normalizeSpec(JSON.parse(JSON.stringify(
         (await import("./src/ui/controls.js")).readSpec())));
-      return { uniformPlan, gradedPlan, afterGap, gradedVisible, mode: spec.mesh.mode,
+      return { beforePlan, gradedPlan, afterGap, gradedVisible, mode: spec.mesh.mode,
                status: document.getElementById("status").textContent,
                result: document.getElementById("res").textContent,
                perf: document.getElementById("perf").textContent };
@@ -362,6 +366,35 @@ async function main() {
     ok("nothing overflows the window horizontally", overflow.scrollWidth <= overflow.innerWidth + 2,
        `page ${overflow.scrollWidth}px in a ${overflow.innerWidth}px window${overflow.wide.length ? ": " + overflow.wide.join(", ") : ""}`);
 
+    /* ---- the current-angle sweep, and the confirming solve at its fitted peak -----------------
+     * Thirteen solves plus one, so it is only worth running where a solve is fast. What it checks
+     * is that the peak solve happens at all, that its angle is the fit's and not a sweep grid
+     * point, and that the form is left on the angle the page is displaying. */
+    if (!tiny) {
+      const sweep = await page.evaluate(async () => {
+        document.getElementById("sweep").click();
+        await new Promise(r => { const t = setInterval(() => { if (!document.getElementById("sweep").disabled) { clearInterval(t); r(); } }, 100); });
+        const { ui } = await import("./src/ui/dom.js");
+        return { status: document.getElementById("status").textContent,
+                 points: ui.sweep?.pts.length ?? 0, peak: ui.sweep?.peak ?? null,
+                 fit: ui.sweep?.fit ?? null, gammaBox: +document.getElementById("gamma").value,
+                 shownGamma: ui.sol?.spec.operatingPoint.currentAngle_elecDeg ?? null };
+      });
+      ok("the sweep solves the whole current-angle range", sweep.points === 13, `${sweep.points} points`);
+      ok("and then solves once more at the fitted peak",
+         sweep.peak !== null && Math.abs(sweep.peak.gamma_deg - sweep.fit.peak) < 0.01,
+         sweep.peak ? `${sweep.peak.gamma_deg}\u00b0, ${sweep.peak.torque_mNm.toFixed(4)} mN\u00b7m` : "no peak solve");
+      ok("the page is left showing that solve, and the form agrees",
+         sweep.peak !== null && sweep.shownGamma === sweep.peak.gamma_deg && sweep.gammaBox === sweep.peak.gamma_deg,
+         `form ${sweep.gammaBox}\u00b0, displayed ${sweep.shownGamma}\u00b0`);
+      okPhysics("the peak solve lands on the fit it was predicted from",
+         sweep.peak !== null && Math.abs(sweep.peak.torque_mNm - sweep.peak.fitted_mNm) / Math.abs(sweep.peak.fitted_mNm) < 0.1,
+         sweep.peak ? `${sweep.peak.torque_mNm.toFixed(4)} vs ${sweep.peak.fitted_mNm.toFixed(4)} mN\u00b7m fitted` : "");
+    } else {
+      skipped++;
+      process.stderr.write("  skip  the current-angle sweep and its peak solve  (software adapter: 14 solves is too slow)\n");
+    }
+
     /* ---- view controls ----------------------------------------------------------------------------- */
     const view = await page.evaluate(async () => {
       document.querySelector("[data-slice='gap']").click();
@@ -377,6 +410,26 @@ async function main() {
 
     // Give the render loop a few frames with the new settings, to catch a shader or binding error.
     await page.waitForTimeout(600);
+
+    /* ---- the page solves by itself on load ------------------------------------------------------
+     * On a fresh page with no query string. Only the start is asserted: the default mesh is the
+     * real one, which on a software adapter would take minutes, so the solve is stopped as soon as
+     * it is seen to have begun. */
+    const fresh = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+    let autoStarted = false;
+    try {
+      await fresh.goto(`http://127.0.0.1:${port}/index.html`, { waitUntil: "load" });
+      await fresh.waitForFunction("window.AFS && window.AFS.ready", null, { timeout: 30000 });
+      autoStarted = await fresh.waitForFunction(
+        () => document.getElementById("solve").disabled || /Solved\. Torque/.test(document.getElementById("status").textContent),
+        null, { timeout: 60000 }).then(() => true).catch(() => false);
+      const st = await fresh.evaluate(() => document.getElementById("status").textContent);
+      ok("the page starts a solve on load, with nobody pressing anything", autoStarted, st.trim().slice(0, 60));
+      // Best effort: the point of the click is to shorten the solve, not to be part of the check.
+      await fresh.evaluate(() => document.getElementById("stop").click()).catch(() => {});
+    } finally {
+      await fresh.close();
+    }
   } finally {
     await browser.close();
     server.close();

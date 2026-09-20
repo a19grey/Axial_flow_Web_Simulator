@@ -75,8 +75,9 @@ export function defaultSpec() {
        * stretched into the far field, with every material interface landing on a mesh face. */
       /* "cylindrical" meshes in (r, theta, z), where the bore, the rim and the pole arcs are all
        * coordinate surfaces, so material fractions are exact rather than staircased, and one pole
-       * pair can stand in for the whole machine. */
-      mode: "uniform",
+       * pair can stand in for the whole machine. It is the default: it resolves the air gap at a
+       * fraction of the cells, and the rotor-frame core loss is only available on it. */
+      mode: "cylindrical",
       cellsAcrossDiameter: 128,        // uniform mode: cells across the whole box
       marginFactor: 0.4,               // outer-box margin as a fraction of outer radius
       marginMin_mm: 12,
@@ -89,7 +90,10 @@ export function defaultSpec() {
       cellsAcrossPcb: 4,
       cellsAcrossBackPlate: 3,
       cellsAcrossBackGap: 2,
-      cellsAcrossPoleArc: 24,          // cylindrical: angular cells per pole pitch
+      /* Angular cells per pole pitch. 64 rather than a rounder number because it is what makes the
+       * angular cell comparable to the radial one on the default machine: fewer, and the pole edges
+       * are smeared in a way the radial resolution hides. */
+      cellsAcrossPoleArc: 64,
       sector: true,                    // cylindrical: model one pole pair rather than the full turn
       growthRatio: 1.2,                // largest ratio between neighbouring cell sizes
       farFieldCellFactor: 8,           // far-field cell size, as a multiple of the in-plane size
@@ -159,7 +163,7 @@ export function normalizeSpec(input) {
   s.operatingPoint.windingTemperature_C = num(op.windingTemperature_C, 20);
 
   const me = src.mesh ?? {}, dm = s.mesh;
-  dm.mode = ["graded", "cylindrical"].includes(me.mode) ? me.mode : "uniform";
+  dm.mode = ["uniform", "graded", "cylindrical"].includes(me.mode) ? me.mode : dm.mode;
   dm.cellsAcrossDiameter = Math.max(16, Math.round(num(me.cellsAcrossDiameter, dm.cellsAcrossDiameter)));
   dm.marginFactor = clampMin(me.marginFactor, 0, dm.marginFactor);
   dm.marginMin_mm = clampMin(me.marginMin_mm, 0, dm.marginMin_mm);
