@@ -11,6 +11,7 @@ export const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
 export const ui = {
   sol: null,        // the last solution, fields included
   sweep: null,      // { pts: [[gamma_deg, torque_Nm], ...], base: spec }
+  angle: null,      // the last torque-vs-rotor-angle study, which shares the sweep canvas
   busy: false,
   abort: null,      // AbortController for the run in flight
   adapterName: "",

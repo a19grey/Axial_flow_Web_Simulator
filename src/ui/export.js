@@ -4,7 +4,7 @@
  */
 
 import { motorGeom, coilPolys } from "../core/geometry.js";
-import { MeshB, annular, rotorSolid, ribbon } from "../render/meshes.js";
+import { MeshB, annular, rotorSolid, ribbon, mirrorZ } from "../render/meshes.js";
 
 const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
 function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_T[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
@@ -31,7 +31,8 @@ export function makeZip(files) {
 export function exportMeshes(p) {
   const g = motorGeom(p), polys = coilPolys(p), P2 = 2 * Math.PI / p.poles, half = p.arc * P2 / 2, th0 = p.theta * Math.PI / 180, out = {};
   let mb = new MeshB(); rotorSolid(mb, p, g, 0); out.rotor = mb;
-  if (p.back) { mb = new MeshB(); annular(mb, g.Rri, g.Rro, 0, 2 * Math.PI, g.zBB, g.zBT, 0); out.back_plate = mb; }
+  if (g.dual) { mb = new MeshB(); rotorSolid(mb, p, g, 0); out.rotor_lower = mirrorZ(mb); }
+  else if (g.back) { mb = new MeshB(); annular(mb, g.Rri, g.Rro, 0, 2 * Math.PI, g.zBB, g.zBT, 0); out.back_plate = mb; }
   mb = new MeshB(); annular(mb, Math.max(0, p.ri - 3), p.ro + 3, 0, 2 * Math.PI, -g.pcbHalf, g.pcbHalf, 0); out.pcb_substrate = mb;
   ["A", "B", "C"].forEach((ph, i) => { const m = new MeshB(); for (const q of polys.filter(q => q.ph === i)) { ribbon(m, q.pts, g.pcbHalf + 0.035, p.traceW, 0); ribbon(m, q.pts, -g.pcbHalf - 0.035, p.traceW, 0); } out["traces_phase_" + ph] = m; });
   return { out, g, polys };

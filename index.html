@@ -63,7 +63,10 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .zrow{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted);margin-top:8px}
 .zrow input{flex:1}
 .cbar{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-top:6px}
-.cbar canvas{flex:1;height:10px;border-radius:2px}
+/* min-width:0 is load-bearing. The canvas carries a 256:1 intrinsic aspect ratio from its width
+   and height attributes, so with height:10px its automatic min-content width is 2560px and a flex
+   item will not shrink below that — which stretched the whole page to 3134px wide. */
+.cbar canvas{flex:1;min-width:0;height:10px;border-radius:2px}
 table{width:100%;border-collapse:collapse;font-size:13px}
 td{padding:5px 0;border-bottom:1px solid var(--line);vertical-align:top}
 td:last-child{text-align:right;white-space:nowrap}
@@ -90,7 +93,10 @@ tr.sub td{color:var(--muted);border-bottom-style:dotted}
 .tgroup h3{margin:0 0 6px;color:var(--ink);font-size:14px}
 .tgroup .seg{margin:2px 0 6px}
 .chk{display:flex;gap:8px;align-items:center;color:var(--ink);margin:4px 0;font-size:14px}
-.legendrow{display:grid;gap:2px;margin-top:8px}
+/* An explicit track. Without one the implicit column is auto-sized, which for a row containing a
+   256x1 canvas at height:10px means a max-content width of 2560px — it stretched the page to
+   3134px. Same failure the .views grid had. */
+.legendrow{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;margin-top:8px}
 .legendrow .cbar span:last-child{min-width:130px}
 .small{font-size:12px}
 textarea{width:100%;font:inherit;font-size:14px;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:5px 7px;resize:vertical}
@@ -126,6 +132,8 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
       <div><label for="turns">Turns per layer</label><input id="turns" type="number" value="10" min="1" step="1"></div>
       <div><label for="amps">Peak current (A)</label><input id="amps" type="number" value="5" step="0.5"></div>
     </div>
+    <label for="copperT">Copper thickness (µm) <span class="muted" style="font-weight:400">— resistance and mass only</span></label>
+    <input id="copperT" type="number" value="35" min="1" step="5">
     <h2 style="margin-top:16px">Rotor</h2>
     <div class="pair">
       <div><label for="gap">Air gap (mm)</label><input id="gap" type="number" value="3" step="0.5" min="0.5"></div>
@@ -135,7 +143,12 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
       <div><label for="tooth">Pole height (mm)</label><input id="tooth" type="number" value="3" step="0.5" min="0.5"></div>
       <div><label for="yoke">Yoke thickness (mm)</label><input id="yoke" type="number" value="4" step="0.5" min="0.5"></div>
     </div>
-    <label for="arc">Pole arc, fraction of pole pitch</label><input id="arc" type="number" value="0.5" step="0.05" min="0.1" max="0.95">
+    <div class="pair">
+      <div><label for="arc">Pole arc / pole pitch</label><input id="arc" type="number" value="0.5" step="0.05" min="0.1" max="0.95"></div>
+      <div><label for="skew">Pole skew (° mech)</label><input id="skew" type="number" value="0" step="2"></div>
+    </div>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:14px;color:var(--ink);font-weight:600"><input id="dual" type="checkbox"> Rotor on both sides (dual-sided)</label>
+    <p id="dualNote" class="muted small" style="margin:4px 0 0" hidden>A mirrored rotor below the board. The stator works into two gaps and the opposite rotor is the flux return, so the back plate is not used.</p>
     <label style="display:flex;gap:8px;align-items:center;margin-top:14px;color:var(--ink);font-weight:600"><input id="back" type="checkbox" checked> Back plate under PCB</label>
     <div class="pair">
       <div><label for="murBack">Back plate μᵣ</label><input id="murBack" type="number" value="20" step="1" min="1"></div>
@@ -147,6 +160,11 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
       <div><label for="theta">Rotor angle (° mech)</label><input id="theta" type="number" value="0" step="5"></div>
       <div><label for="gamma">Current angle γ (° elec)</label><input id="gamma" type="number" value="45" step="5"></div>
     </div>
+    <div class="pair">
+      <div><label for="rpm">Speed (rpm)</label><input id="rpm" type="number" value="0" step="100"></div>
+      <div><label for="tempC">Winding temp (°C)</label><input id="tempC" type="number" value="20" step="5"></div>
+    </div>
+    <p class="muted small" style="margin:4px 0 0">Neither enters the field solve. Speed sets the electrical frequency for core loss; temperature sets the copper resistivity.</p>
     <h2 style="margin-top:16px">Mesh</h2>
     <div class="seg" role="group" aria-label="Mesh mode" style="margin-bottom:6px">
       <button data-mesh="uniform" aria-pressed="true">Uniform</button><button data-mesh="graded" aria-pressed="false">Graded</button><button data-mesh="cylindrical" aria-pressed="false">Cylindrical</button>
@@ -175,7 +193,7 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
       </div>
       <div id="meshCylOnly" hidden>
         <div class="pair">
-          <div><label for="mArc">Cells per pole pitch</label><input id="mArc" type="number" value="12" min="4" step="2"></div>
+          <div><label for="mArc">Cells per pole pitch</label><input id="mArc" type="number" value="24" min="4" step="2"></div>
           <div><label for="mSector" style="margin-bottom:6px">One pole pair only</label><input id="mSector" type="checkbox" checked style="width:auto"></div>
         </div>
       </div>
@@ -188,6 +206,15 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
       <button id="sweep">Sweep current angle γ</button>
       <button id="stop" disabled>Stop</button>
     </div>
+    <details>
+      <summary>Cross-checks and characterization</summary>
+      <div class="actions">
+        <button id="xVirtual">Torque again, by virtual work</button>
+        <button id="xInduct">Inductance matrix, L<sub>d</sub> and L<sub>q</sub></button>
+        <button id="xAngle">Torque through one electrical period</button>
+      </div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">Each of these costs several solves. Virtual work recomputes the torque from the co-energy derivative, which shares nothing with the Maxwell stress tensor but the field itself; the inductance matrix comes with a reciprocity check; the angle sweep gives ripple, harmonics and — on a cylindrical mesh — core loss.</p>
+    </details>
     <details>
       <summary>Validation tests</summary>
       <div class="actions">
@@ -248,12 +275,13 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
     </div>
     <div class="panel"><h2 id="resTitle">Result</h2><div id="res" class="muted">Press Solve to compute the field for the current design.</div>
       <div id="quality" hidden></div></div>
+    <div class="panel" id="crossPanel" hidden><h2 id="crossTitle">Cross-check</h2><div id="cross"></div></div>
     <div class="panel"><h2>Solver</h2><div id="perf" class="muted">No solve yet.</div></div>
   </aside>
 </main>
 
 <section class="plots">
-  <div class="panel"><h2>Torque vs current angle <span class="muted" style="font-weight:400">— reluctance torque should follow sin 2γ</span></h2><canvas id="sweepPlot"></canvas></div>
+  <div class="panel"><h2 id="p1title">Torque vs current angle <span class="muted" style="font-weight:400">— reluctance torque should follow sin 2γ</span></h2><canvas id="sweepPlot"></canvas></div>
   <div class="panel"><h2 id="p2title">Convergence</h2><canvas id="p2"></canvas></div>
 </section>
 

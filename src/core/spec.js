@@ -7,7 +7,7 @@
  * files load unchanged, and adds an explicit `mesh` section (v1 kept the grid under `solver`).
  */
 
-import { PCB, SOLVER_DEFAULTS } from "./constants.js";
+import { PCB, SOLVER_DEFAULTS, MATERIALS, CORE_LOSS_DEFAULTS, COPPER_THICKNESS_UM } from "./constants.js";
 
 export const SPEC_FORMAT = "axial-flux-project";
 export const SPEC_VERSION = 2;
@@ -36,15 +36,39 @@ export function defaultSpec() {
         thickness_mm: PCB.thickness_mm,
         tracePitch_mm: PCB.tracePitch_mm,
         traceWidth_mm: PCB.traceWidth_mm,
-        edgeMargin_mm: PCB.edgeMargin_mm
+        edgeMargin_mm: PCB.edgeMargin_mm,
+        /* Copper foil thickness and laminate density. Neither affects the field: the traces are
+         * modelled as filaments. They set the winding resistance and the stator mass. */
+        copperThickness_um: COPPER_THICKNESS_UM,
+        boardDensity_kg_m3: MATERIALS.boardDensity_kg_m3,
+        /* Winding layout. null means the classical 3-phase concentrated arrangement the tool has
+         * always used: 1.5 x poles coils, phase k mod 3, all wound the same way round. An explicit
+         * coilCount with phasePattern / coilSense arrays describes any other single-layer layout. */
+        coilCount: null,
+        phasePattern: null,
+        coilSense: null
       },
       rotor: {
         airGap_mm: 3, mu_r: 20,
-        poleHeight_mm: 3, yokeThickness_mm: 4, poleArcFraction: 0.5
+        poleHeight_mm: 3, yokeThickness_mm: 4, poleArcFraction: 0.5,
+        /* A second rotor mirrored below the board: the YASA / dual-rotor topology. The stator sits
+         * between two working gaps and both rotors are on the same shaft, so their torques add. */
+        dualSided: false,
+        /* Linear skew of the pole arc with radius, in mechanical degrees from the inner radius to
+         * the outer. Skew trades peak torque for ripple. */
+        poleSkew_deg: 0,
+        density_kg_m3: MATERIALS.ironDensity_kg_m3,
+        coreLoss: { ...CORE_LOSS_DEFAULTS }
       },
-      backPlate: { enabled: true, mu_r: 20, thickness_mm: 4, gapBelowPcb_mm: 1 }
+      backPlate: { enabled: true, mu_r: 20, thickness_mm: 4, gapBelowPcb_mm: 1,
+                   density_kg_m3: MATERIALS.ironDensity_kg_m3 }
     },
-    operatingPoint: { rotorAngle_deg: 0, currentAngle_elecDeg: 45 },
+    operatingPoint: {
+      rotorAngle_deg: 0, currentAngle_elecDeg: 45,
+      /* Mechanical speed and winding temperature. Neither enters the field solve; speed sets the
+       * electrical frequency for core loss, temperature sets the copper resistivity. */
+      speed_rpm: 0, windingTemperature_C: 20
+    },
     mesh: {
       /* "uniform" reproduces the original single-cell-size grid exactly.
        * "graded" sizes each axis from the geometry: fine through the air gap and the thin parts,
@@ -99,6 +123,11 @@ export function normalizeSpec(input) {
   ds.tracePitch_mm = clampMin(st.tracePitch_mm, 0.05, ds.tracePitch_mm);
   ds.traceWidth_mm = clampMin(st.traceWidth_mm, 0.01, ds.traceWidth_mm);
   ds.edgeMargin_mm = clampMin(st.edgeMargin_mm, 0, ds.edgeMargin_mm);
+  ds.copperThickness_um = clampMin(st.copperThickness_um, 1, ds.copperThickness_um);
+  ds.boardDensity_kg_m3 = clampMin(st.boardDensity_kg_m3, 0, ds.boardDensity_kg_m3);
+  ds.coilCount = st.coilCount == null ? null : Math.max(1, Math.round(num(st.coilCount, 1)));
+  ds.phasePattern = intArray(st.phasePattern, 0, 2);
+  ds.coilSense = signArray(st.coilSense);
 
   const rt = src.design?.rotor ?? {}, dr = s.design.rotor;
   dr.airGap_mm = clampMin(rt.airGap_mm, 0.3, dr.airGap_mm);
@@ -106,16 +135,28 @@ export function normalizeSpec(input) {
   dr.poleHeight_mm = clampMin(rt.poleHeight_mm, 0.3, dr.poleHeight_mm);
   dr.yokeThickness_mm = clampMin(rt.yokeThickness_mm, 0.3, dr.yokeThickness_mm);
   dr.poleArcFraction = Math.min(0.95, Math.max(0.1, num(rt.poleArcFraction, dr.poleArcFraction)));
+  dr.dualSided = rt.dualSided === undefined ? dr.dualSided : !!rt.dualSided;
+  dr.poleSkew_deg = num(rt.poleSkew_deg, dr.poleSkew_deg);
+  dr.density_kg_m3 = clampMin(rt.density_kg_m3, 0, dr.density_kg_m3);
+  const cl = rt.coreLoss ?? {};
+  dr.coreLoss.specificLoss_W_per_kg = clampMin(cl.specificLoss_W_per_kg, 0, dr.coreLoss.specificLoss_W_per_kg);
+  dr.coreLoss.atFlux_T = clampMin(cl.atFlux_T, 1e-3, dr.coreLoss.atFlux_T);
+  dr.coreLoss.atFrequency_Hz = clampMin(cl.atFrequency_Hz, 1e-3, dr.coreLoss.atFrequency_Hz);
+  dr.coreLoss.fluxExponent = clampMin(cl.fluxExponent, 0.5, dr.coreLoss.fluxExponent);
+  dr.coreLoss.frequencyExponent = clampMin(cl.frequencyExponent, 0.5, dr.coreLoss.frequencyExponent);
 
   const bp = src.design?.backPlate ?? {}, db = s.design.backPlate;
   db.enabled = bp.enabled === undefined ? db.enabled : !!bp.enabled;
   db.mu_r = clampMin(bp.mu_r, 1, db.mu_r);
   db.thickness_mm = clampMin(bp.thickness_mm, 0.3, db.thickness_mm);
   db.gapBelowPcb_mm = clampMin(bp.gapBelowPcb_mm, 0, db.gapBelowPcb_mm);
+  db.density_kg_m3 = clampMin(bp.density_kg_m3, 0, db.density_kg_m3);
 
   const op = src.operatingPoint ?? {};
   s.operatingPoint.rotorAngle_deg = num(op.rotorAngle_deg, 0);
   s.operatingPoint.currentAngle_elecDeg = num(op.currentAngle_elecDeg, 45);
+  s.operatingPoint.speed_rpm = num(op.speed_rpm, 0);
+  s.operatingPoint.windingTemperature_C = num(op.windingTemperature_C, 20);
 
   const me = src.mesh ?? {}, dm = s.mesh;
   dm.mode = ["graded", "cylindrical"].includes(me.mode) ? me.mode : "uniform";
@@ -145,6 +186,17 @@ export function normalizeSpec(input) {
   const errs = validateSpec(s);
   if (errs.length) throw new Error(errs.join(" "));
   return { spec: s, warnings };
+}
+
+/* An optional array of small integers, clamped to a range. Anything unusable becomes null, which
+ * every consumer reads as "use the default pattern". */
+function intArray(v, lo, hi) {
+  if (!Array.isArray(v) || !v.length) return null;
+  return v.map(x => Math.min(hi, Math.max(lo, Math.round(num(x, lo)))));
+}
+function signArray(v) {
+  if (!Array.isArray(v) || !v.length) return null;
+  return v.map(x => (num(x, 1) < 0 ? -1 : 1));
 }
 
 function pickEnum(v, allowed, fallback, path, warnings) {
@@ -198,9 +250,13 @@ export function specToParams(spec) {
     turns: st.turnsPerLayer, amps: st.peakCurrent_A,
     pcbT: st.thickness_mm, pitch: st.tracePitch_mm, traceW: st.traceWidth_mm, edge: st.edgeMargin_mm,
     arcSegments: PCB.arcSegments,
+    copperT: st.copperThickness_um * 1e-3, boardRho: st.boardDensity_kg_m3,
+    coilCount: st.coilCount, phasePattern: st.phasePattern, coilSense: st.coilSense,
     gap: rt.airGap_mm, murRot: rt.mu_r, tooth: rt.poleHeight_mm, yoke: rt.yokeThickness_mm, arc: rt.poleArcFraction,
-    back: bp.enabled, murBack: bp.mu_r, backT: bp.thickness_mm, backGap: bp.gapBelowPcb_mm,
+    dual: rt.dualSided, skew: rt.poleSkew_deg, rotorRho: rt.density_kg_m3, coreLoss: rt.coreLoss,
+    back: bp.enabled, murBack: bp.mu_r, backT: bp.thickness_mm, backGap: bp.gapBelowPcb_mm, backRho: bp.density_kg_m3,
     theta: spec.operatingPoint.rotorAngle_deg, gamma: spec.operatingPoint.currentAngle_elecDeg,
+    rpm: spec.operatingPoint.speed_rpm, tempC: spec.operatingPoint.windingTemperature_C,
     grid: spec.mesh.cellsAcrossDiameter,
     marginFactor: spec.mesh.marginFactor, marginMin: spec.mesh.marginMin_mm,
     mesh: spec.mesh

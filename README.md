@@ -39,12 +39,14 @@ recent Chrome or Edge, or Safari 26+.
 
 **Run the tests:**
 
-    npm test               # all four suites, ~45 s
-    npm run test:quick     # analytic + UI only, ~15 s — the one to use while editing
+    npm test               # every suite, ~55 s
+    npm run test:quick     # analytic + closed forms + UI, ~20 s — the one to use while editing
     npm run test:ui
     npm run test:convergence
+    npm run test:metrics
 
-Two suites need a real GPU and are local-only; `analytic` and `ui` also run in CI on SwiftShader's
+Three suites need a real GPU and are local-only. CI runs `analytic`, the closed-form half of
+`metrics` (`node tests/metrics.js --cpu-only`, which needs no GPU at all), and `ui` on SwiftShader's
 software adapter, where the UI suite shrinks every mesh and visibly skips the assertions that depend
 on resolution. See `docs/numerics.md` for what runs where and why.
 
@@ -57,6 +59,11 @@ on resolution. See `docs/numerics.md` for what runs where and why.
     npm run cli -- sweep --path operatingPoint.currentAngle_elecDeg --from 0 --to 180 --step 15
     npm run cli -- convergence src/cases/scale-370mm.json --factors 0.6,0.8,1,1.3
     npm run cli -- validate
+
+    npm run cli -- virtualwork src/cases/scale-370mm.json   # torque again, a different way
+    npm run cli -- inductance                               # L matrix, Ld/Lq, reciprocity
+    npm run cli -- angle --count 24                         # ripple, harmonics, core loss
+    npm run cli -- energy                                   # stored energy, two ways
 
 The `--` is npm's separator: everything after it goes to the script. `npm run cli -- <command>`
 reaches any subcommand; `node cli/run.js <command>` works identically if you prefer.
@@ -81,12 +88,19 @@ Every numeric field carries its unit in its name.
   "format": "axial-flux-project", "version": 2,
   "design": {
     "stator":    { "poles": 4, "copperLayers": 2, "innerRadius_mm": 15, "outerRadius_mm": 40,
-                   "turnsPerLayer": 10, "peakCurrent_A": 5, "thickness_mm": 1.6 },
+                   "turnsPerLayer": 10, "peakCurrent_A": 5, "thickness_mm": 1.6,
+                   "copperThickness_um": 35,
+                   "coilCount": null, "phasePattern": null, "coilSense": null },
     "rotor":     { "airGap_mm": 3, "mu_r": 20, "poleHeight_mm": 3,
-                   "yokeThickness_mm": 4, "poleArcFraction": 0.5 },
+                   "yokeThickness_mm": 4, "poleArcFraction": 0.5,
+                   "dualSided": false, "poleSkew_deg": 0, "density_kg_m3": 7650,
+                   "coreLoss": { "specificLoss_W_per_kg": 4.0, "atFlux_T": 1.5,
+                                 "atFrequency_Hz": 50, "fluxExponent": 2.0,
+                                 "frequencyExponent": 1.6 } },
     "backPlate": { "enabled": true, "mu_r": 20, "thickness_mm": 4, "gapBelowPcb_mm": 1 }
   },
-  "operatingPoint": { "rotorAngle_deg": 0, "currentAngle_elecDeg": 45 },
+  "operatingPoint": { "rotorAngle_deg": 0, "currentAngle_elecDeg": 45,
+                      "speed_rpm": 0, "windingTemperature_C": 20 },
   "mesh":   { "mode": "graded",
               "activeCellsAcrossDiameter": 160, "cellsAcrossAirGap": 6,
               "cellsAcrossPoleHeight": 4, "cellsAcrossYoke": 3, "cellsAcrossPcb": 4,
@@ -96,6 +110,10 @@ Every numeric field carries its unit in its name.
   "solver": { "tolerance": 1e-5, "maxIterations": 4000, "checkInterval": 32, "stallPatience": 6 }
 }
 ```
+
+`null` means "use the default": the classical winding layout, in the three `coil*` fields. Speed,
+winding temperature, copper thickness and the densities never enter the field solve — they turn a
+solved field into resistance, loss and mass.
 
 Version 1 project files from the single-file tool load unchanged; the grid setting moves from
 `solver.gridCellsAcrossDiameter` to `mesh.cellsAcrossDiameter` on the way in.
@@ -112,6 +130,10 @@ Published by both pages. Every call takes plain JSON and returns plain JSON.
 | `AFS.sweep(spec, sweepSpec, opts)` | one entry per point |
 | `AFS.validate(which, spec)` | the validation report, with pass/fail per case |
 | `AFS.convergence(spec, opts)` | the same design at several refinements, with a fitted order and an error bar |
+| `AFS.virtualWork(spec)` | torque from the co-energy derivative, next to the Maxwell-stress torque — 7 solves |
+| `AFS.inductance(spec)` | the 3×3 inductance matrix, Ld and Lq, and the reciprocity check — 3 solves |
+| `AFS.torqueVsAngle(spec, {count})` | one electrical period: mean torque, ripple, harmonics, core loss |
+| `AFS.energyCheck(spec)` | stored energy from the field against stored energy from the inductance matrix |
 | `AFS.defaultSpec()` / `AFS.normalizeSpec(s)` | build and check a spec |
 
 `solve`, `sweep` and `validate` resolve to `{ok: true, value}` or `{ok: false, error}` rather than
@@ -127,8 +149,20 @@ The motor axis is **z**, the PCB mid-plane is **z = 0**, and all lengths are in 
 | Part | Description |
 |---|---|
 | Stator PCB | 1.6 mm board carrying 2 or 4 copper layers, with 1.5·P concentrated coils. Each coil is concentric trapezoidal turns at 0.5 mm pitch with 0.34 mm traces. Coil *k* belongs to phase *k* mod 3. The board is non-magnetic. |
-| Rotor | A yoke ring with P salient poles on its underside, facing the PCB across the air gap. Uniform relative permeability μᵣ. |
-| Back plate | Optional ring below the PCB, with its own μᵣ, closing the flux path. |
+| Rotor | A yoke ring with P salient poles on its underside, facing the PCB across the air gap. Uniform relative permeability μᵣ. Poles can be skewed linearly with radius. |
+| Second rotor | Optional mirror image below the board — the dual-sided topology. Both rotors are on one shaft, so their torques add, and the opposite rotor replaces the back plate as the flux return. |
+| Back plate | Optional ring below the PCB, with its own μᵣ, closing the flux path. Ignored on a dual-sided machine. |
+
+Every magnetic part is described as an **annular sector extrusion** — a radial interval, an axial
+interval, and either a full annulus or a regular pattern of arcs — held in a list rather than as
+branches in the rasterizer. A second rotor is two more entries in that list, and the mass
+calculation evaluates exactly the same geometry the solve discretized.
+
+The winding layout is data too. The default is the classical arrangement — 1.5·P concentrated
+coils, phase *k* mod 3, all wound the same way round — but `coilCount`, `phasePattern` and
+`coilSense` describe any other single-layer layout, and the angular period is then *derived* from
+the pattern rather than assumed. A winding that alternates the sense of same-phase coils has no
+plain period and correctly reports one sector, i.e. the full turn.
 
 Phase currents for rotor angle θᵣ (mechanical) and current angle γ (electrical, from the rotor d-axis):
 
@@ -180,8 +214,47 @@ Mean gap B_z is interpolated to exactly mid-gap rather than sampled on the neare
 old definition moved 2.8% under z-refinement purely because the sampled layer moved; the new one
 moves 0.65% and does not drift.
 
+**4. Torque again, by virtual work.** The rate of change of magnetic co-energy with rotor position
+at constant current, τ = ∂W′/∂θ|_I. A surface integral in the air gap against a volume integral over
+the whole domain: they share the field and nothing else, which makes their agreement a far stronger
+statement than two stress surfaces agreeing. On the 370 mm machine they are **0.09% apart**.
+
+The co-energy is summed on *faces*, not at cell centres — see `docs/numerics.md` for why that is
+the difference between a right answer and one that is off by a factor of a thousand.
+
+**5. Flux linkage and inductance.** By reciprocity, λ_j = ∫ H_sj·**B** dV with H_sj the free-space
+field of coil *j* alone. Applied to the material response only, since the surface term of that
+identity lives at infinity, so L = L₀ + ΔL: the air-core half in closed form from Neumann's double
+integral over the filaments, the material half from the solve. Ld and Lq follow from an
+amplitude-invariant Park transform at the rotor's electrical angle.
+
+This comes with a check that costs nothing: L_jk = L_kj is a theorem, so any asymmetry is pure
+discretization error. It measures 0.003% on the 80 mm machine and falls fourth-order with angular
+refinement. And L₀, being circulant for a symmetric three-phase winding, must have Ld = Lq exactly —
+so all of a machine's saliency has to appear in the material half, and it does.
+
 For an ideal synchronous reluctance machine τ ∝ (L_d − L_q)·I²·sin 2γ, so torque peaks near γ = 45°
 and is zero at 0° and 90°. The γ sweep plots this directly.
+
+## What a solve reports
+
+Beyond the field, every solve carries winding resistance at the stated temperature, copper loss at
+the stated current, the mass of each part, torque density, torque per amp and per √W, and the
+volume the mesh gave each region against that region's exact volume. None of it costs another GPU
+pass.
+
+The characterizations that genuinely need more solves are separate calls, so their cost is visible:
+
+| Call | Cost | Gives |
+|---|---|---|
+| `virtualWork` | 7 solves | torque by a second, independent method |
+| `inductance` | 3 solves | L matrix, Ld/Lq, saliency, reciprocity error |
+| `torqueVsAngle` | one per position | mean torque, ripple, harmonics, core loss |
+| `energyCheck` | 4 solves | stored energy two ways |
+
+Core loss needs the rotor frame, which a cylindrical mesh recovers exactly as an index shift and a
+Cartesian mesh cannot. On a Cartesian mesh the tool reports core loss as unavailable, with the
+reason, rather than returning a number it cannot justify.
 
 ## Meshing
 
@@ -312,6 +385,7 @@ antisymmetric between 45° and 135°, and the two stress surfaces agree.
 | `reference` | *(needs a GPU)* every design matches the frozen pre-split single-file build to 1e-9 relative |
 | `ui` | the real page: solve, both validation buttons, project round-trip, v1 migration, model export, graded meshing, view controls, and no console errors |
 | `convergence` | *(needs a GPU)* the answer stops moving under refinement; grading beats uniform per cell; a periodic sector reproduces the full turn exactly; cylindrical and Cartesian agree on a converged answer; the 370 mm case runs; a 14 M-cell solve returns a real answer rather than zeros |
+| `metrics` | *(GPU for half of it)* loop self-inductance against its closed form; cylindrical cell volumes tiling an annulus exactly; rasterized region volumes against exact ones; the winding period derived rather than assumed; Maxwell stress against virtual work; reciprocity of the inductance matrix and its convergence; stored energy two ways; the two rotors of a dual-sided machine; skew trading ripple for torque |
 
 `tests/reference/axial-flux-3d-webgpu.html` is the original single-file build, kept so the
 regression is reproducible indefinitely. `tests/compare-reference.js` drives it through its own
@@ -346,7 +420,8 @@ torque and gap field side by side.
 
 See `docs/limitations.md` for the full statement. In short:
 
-- **Linear materials only.** No B-H saturation yet.
+- **Linear materials only.** No B-H saturation yet, and no permanent magnets — so no cogging
+  torque and no back-EMF constant.
 - **μᵣ ≲ 200.** Inside high-permeability material H is a small difference of large terms, and f32
   loses it. WebGPU has no f64. Solves past this are flagged in the results rather than failing
   silently.
@@ -354,12 +429,17 @@ See `docs/limitations.md` for the full statement. In short:
   land on the bore or the pole arcs. Use `cylindrical` for anything where that matters; the
   Cartesian modes are kept for cross-checking and for geometry that is not annular.
 - **Simplified windings.** Concentric loops rather than spirals; no vias or end connections.
-- **Magnetostatics only.** No eddy currents, hysteresis, back-EMF or time stepping.
+- **Magnetostatics only.** No eddy currents, hysteresis or time stepping; an angle sweep is a
+  sequence of static solves, not a transient.
+- **Core loss is indicative.** Steinmetz scaling of a datasheet figure with textbook exponents.
+  Replace the coefficients before quoting a number.
+- **Winding resistance and copper mass are lower bounds.** They count the modelled traces only —
+  no run-outs, vias or star point.
 
 ## Repository layout
 
     index.html  headless.html      the two pages
-    src/core/                      spec, geometry, assembly, solve, torque, results, validation — no DOM
+    src/core/                      spec, geometry, assembly, solve, torque, metrics, studies, results — no DOM
     src/gpu/                       device, buffers, shaders, Biot-Savart, CG — no DOM
     src/render/                    3D view and the analytic meshes it shares with the exporter
     src/ui/                        controls, panels, plots, project, export, page wiring

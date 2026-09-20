@@ -16,17 +16,22 @@ export const CONTROLS = {
   ro:      ["design.stator.outerRadius_mm", "number"],
   turns:   ["design.stator.turnsPerLayer", "number"],
   amps:    ["design.stator.peakCurrent_A", "number"],
+  copperT: ["design.stator.copperThickness_um", "number"],
   gap:     ["design.rotor.airGap_mm", "number"],
   murRot:  ["design.rotor.mu_r", "number"],
   tooth:   ["design.rotor.poleHeight_mm", "number"],
   yoke:    ["design.rotor.yokeThickness_mm", "number"],
   arc:     ["design.rotor.poleArcFraction", "number"],
+  skew:    ["design.rotor.poleSkew_deg", "number"],
+  dual:    ["design.rotor.dualSided", "check"],
   back:    ["design.backPlate.enabled", "check"],
   murBack: ["design.backPlate.mu_r", "number"],
   backT:   ["design.backPlate.thickness_mm", "number"],
   backGap: ["design.backPlate.gapBelowPcb_mm", "number"],
   theta:   ["operatingPoint.rotorAngle_deg", "number"],
   gamma:   ["operatingPoint.currentAngle_elecDeg", "number"],
+  rpm:     ["operatingPoint.speed_rpm", "number"],
+  tempC:   ["operatingPoint.windingTemperature_C", "number"],
   grid:    ["mesh.cellsAcrossDiameter", "select"],
   mActive: ["mesh.activeCellsAcrossDiameter", "number"],
   mGap:    ["mesh.cellsAcrossAirGap", "number"],
@@ -39,6 +44,22 @@ export const CONTROLS = {
   mArc:    ["mesh.cellsAcrossPoleArc", "number"],
   mSector: ["mesh.sector", "check"]
 };
+
+/* A dual-sided machine has no back plate: the opposite rotor is the flux return. The controls for
+ * it are left in place but shown as inactive, because hiding them would make a loaded project look
+ * as though it had lost settings it still has. */
+export function syncDualSided() {
+  const on = !!$("#dual")?.checked;
+  const note = $("#dualNote");
+  if (note) note.hidden = !on;
+  for (const id of ["back", "murBack", "backT", "backGap", "mBack"]) {
+    const el = $("#" + id);
+    if (!el) continue;
+    el.disabled = on;
+    const row = el.closest("label") || el.parentElement;
+    if (row) row.style.opacity = on ? 0.45 : 1;
+  }
+}
 
 /* Mesh mode is a segmented control rather than an input, so it is held here. */
 export const meshMode = { value: "uniform" };
@@ -113,6 +134,7 @@ export function writeSpec(spec) {
     } else if (Number.isFinite(+v)) el.value = +v;
     else skipped.push(path);
   }
+  syncDualSided();
   if ($("#projName")) $("#projName").value = spec.name || "";
   if ($("#projNotes")) $("#projNotes").value = spec.notes || "";
   announceSpecChange();

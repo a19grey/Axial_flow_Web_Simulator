@@ -7,6 +7,7 @@
 import { $, ui } from "./dom.js";
 import { fmtB } from "./format.js";
 import { analyzeLoop, analyzeSphere } from "../core/validate.js";
+import { resultsSummary } from "../core/results.js";
 
 const sgn = v => (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
 export function perfPanel(sol) {
@@ -30,6 +31,16 @@ export function resultPanel(sol) {
     $("#resTitle").textContent = "Torque and gap field";
     if (!T.length) { $("#res").innerHTML = `<span class="fail">The air gap is thinner than one grid cell, so no torque surface fits in it. Use a finer mesh or a larger gap.</span>`; return; }
     const Tm = m.torque, agree = m.torqueSpread_pct;
+    const res = resultsSummary(sol), d = res.derived;
+    /* A dual-sided machine gets a line per rotor. They are mirror images, so their difference is a
+     * mesh asymmetry and worth showing rather than averaging away. */
+    const rotorRows = res.rotors.length < 2 ? "" : `<table>
+        ${res.rotors.map(r => `<tr class="sub"><td>${r.name === "upper" ? "Upper" : "Lower"} rotor, gap at z = ${r.midGapZ_mm.toFixed(2)} mm</td><td>${r.torque_mNm.toFixed(4)} mN·m</td></tr>`).join("")}
+        <tr class="sub"><td>Imbalance between them</td><td class="${res.rotorImbalance_pct < 2 ? "pass" : "fail"}">${res.rotorImbalance_pct.toFixed(2)}%</td></tr>
+      </table>`;
+    // Worst mismatch between the volume each region should occupy and the volume the mesh gave it.
+    const worst = d.rasterization ? d.rasterization.reduce((a, b) => (Math.abs(b.error_pct) > Math.abs(a.error_pct) ? b : a)) : null;
+    const rast = !worst ? "" : `<tr class="sub"><td>Meshed volume vs exact, worst region</td><td class="${Math.abs(worst.error_pct) < 1 ? "pass" : "warn"}">${worst.error_pct >= 0 ? "+" : ""}${worst.error_pct.toFixed(3)}%</td></tr>`;
     $("#res").innerHTML = `
       <div class="muted" style="font-size:13px">Torque on rotor</div>
       <div class="big">${(Tm * 1e3).toFixed(3)} mN·m</div>
@@ -40,8 +51,20 @@ export function resultPanel(sol) {
         <tr><td>Phase currents A · B · C</td><td>${I.map(v => v.toFixed(2)).join(" · ")} A</td></tr>
         <tr><td>Mean |B<sub>z</sub>| mid-gap over coils</td><td>${fmtB(m.gapBz)}</td></tr>
         <tr><td>Peak |B| in magnetic parts</td><td>${fmtB(m.bmaxMat)}</td></tr>
-        <tr class="sub"><td>Coil turns total</td><td>${sol.job.polys.length / (1.5 * sol.job.p.poles)} per layer · ${sol.job.p.layers} layers</td></tr>
-      </table>`;
+        <tr class="sub"><td>Coil turns total</td><td>${(sol.job.polys.length / d.winding.coils).toFixed(0)} per coil · ${d.winding.coils} coils · ${sol.job.p.layers} layers</td></tr>
+      </table>
+      ${rotorRows}
+      <h3 style="margin:14px 0 4px;font-size:13px">Derived</h3>
+      <table>
+        <tr><td>Phase resistance at ${d.winding.temperature_C.toFixed(0)} °C</td><td>${d.winding.phaseResistance_ohm[0].toFixed(3)} Ω</td></tr>
+        <tr class="sub"><td>Conductor per phase</td><td>${d.winding.conductorLength_m[0].toFixed(2)} m × ${d.winding.conductorArea_mm2.toFixed(4)} mm²</td></tr>
+        <tr><td>Copper loss at this current</td><td>${d.losses_W.copper.toFixed(2)} W</td></tr>
+        <tr><td>Mass, rotor · stator</td><td>${(d.mass_kg.rotor * 1e3).toFixed(0)} · ${(d.mass_kg.stator * 1e3).toFixed(0)} g</td></tr>
+        <tr><td>Torque density</td><td>${d.perUnit.torqueDensity_Nm_per_kg === null ? "—" : (d.perUnit.torqueDensity_Nm_per_kg * 1e3).toFixed(3) + " mN·m/kg"}</td></tr>
+        <tr class="sub"><td>Torque per amp · per √W</td><td>${d.perUnit.torquePerAmp_mNm_per_A === null ? "—" : d.perUnit.torquePerAmp_mNm_per_A.toFixed(4) + " mN·m/A"} · ${d.perUnit.torquePerRootWatt_Nm_per_sqrtW === null ? "—" : (d.perUnit.torquePerRootWatt_Nm_per_sqrtW * 1e3).toFixed(3) + " mN·m/√W"}</td></tr>
+        ${rast}
+      </table>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">Resistance and copper mass count the modelled traces only — no run-outs, vias or star point — so both are lower bounds for a real board.</p>`;
   } else if (k === "sphere") {
     // Numbers come from core/validate.js, the same function the headless runner uses, so the page
     // and the CLI can never disagree about whether this case passed.
@@ -71,4 +94,65 @@ export function qualityPanel(flags) {
   el.hidden = false;
   el.innerHTML = flags.map(f =>
     `<p class="${f.level === "error" ? "fail" : "warn"}" style="margin:6px 0;font-size:13px">${f.message}</p>`).join("");
+}
+
+/* ---- cross-checks ------------------------------------------------------------------------------ */
+
+const pct = v => (v === null || v === undefined ? "—" : `${v.toFixed(2)}%`);
+const cls = (v, good) => (v === null || v === undefined ? "" : v <= good ? "pass" : "fail");
+
+/* The virtual-work, inductance and angle studies, each rendered into the same panel. What these
+ * are for is comparison, so every one of them leads with the number that disagrees. */
+export function crossPanel(kind, r) {
+  const panel = $("#crossPanel"), el = $("#cross");
+  if (!panel || !el) return;
+  panel.hidden = false;
+  if (kind === "virtualWork") {
+    $("#crossTitle").textContent = "Torque by two independent methods";
+    el.innerHTML = `
+      <div class="muted" style="font-size:13px">Virtual work — dW′/dθ at constant current</div>
+      <div class="big">${r.torqueVirtualWork_mNm.toFixed(4)} mN·m</div>
+      <div style="font-size:13px;margin-bottom:8px">Maxwell stress on the same field gives
+        ${r.torqueMaxwellStress_mNm.toFixed(4)} mN·m — they differ by
+        <span class="${cls(r.disagreement_pct, 3)}">${pct(r.disagreement_pct)}</span></div>
+      <table>
+        ${r.stencilEstimates.map(e => `<tr class="sub"><td>Order-${e.order} stencil</td><td>${e.torque_mNm.toFixed(4)} mN·m</td></tr>`).join("")}
+        <tr class="sub"><td>Spread across stencil orders</td><td class="${cls(r.stencilSpread_pct, 2)}">${pct(r.stencilSpread_pct)}</td></tr>
+        <tr class="sub"><td>Spread across stress surfaces</td><td class="${cls(r.maxwellSurfaceSpread_pct, 5)}">${pct(r.maxwellSurfaceSpread_pct)}</td></tr>
+        <tr class="sub"><td>Step · solves</td><td>${r.step_deg.toFixed(3)}° · ${r.solves}</td></tr>
+      </table>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">A surface integral in the air gap against a volume integral over the whole domain. They share the field and nothing else, so agreement here is a much stronger statement than agreement between two stress surfaces.</p>`;
+  } else if (kind === "inductance") {
+    const t = r.dq_H.total, uH = v => (v * 1e6).toFixed(3);
+    $("#crossTitle").textContent = "Inductance";
+    el.innerHTML = `
+      <div class="muted" style="font-size:13px">L<sub>d</sub> and L<sub>q</sub> at θ<sub>e</sub> = ${r.electricalAngle_deg.toFixed(1)}°</div>
+      <div class="big">${uH(t.Ld)} / ${uH(t.Lq)} µH</div>
+      <div style="font-size:13px;margin-bottom:8px">Saliency ratio ${r.saliencyRatio.toFixed(4)}</div>
+      <table>
+        <tr><td>From the material response</td><td>${uH(r.dq_H.material.Ld)} / ${uH(r.dq_H.material.Lq)} µH</td></tr>
+        <tr class="sub"><td>Air-core part, filament estimate</td><td>${uH(t.Ld - r.dq_H.material.Ld)} µH, equal in d and q</td></tr>
+        <tr><td>Reciprocity, L<sub>jk</sub> vs L<sub>kj</sub></td><td class="${cls(r.reciprocity.asymmetry_pct, 1)}">${pct(r.reciprocity.asymmetry_pct)}</td></tr>
+        <tr><td>Torque from (3/2)(P/2)(L<sub>d</sub>−L<sub>q</sub>)i<sub>d</sub>i<sub>q</sub></td><td>${r.torqueFromSaliency_mNm.toFixed(4)} mN·m</td></tr>
+        <tr class="sub"><td>Currents i<sub>d</sub> · i<sub>q</sub></td><td>${r.currents_A.d.toFixed(3)} · ${r.currents_A.q.toFixed(3)} A</td></tr>
+      </table>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">Reciprocity is a theorem, so the asymmetry is pure discretization error — it falls with angular refinement and is an error bar that costs nothing. The saliency torque assumes a harmonic-free machine, which a concentrated winding is not, so expect it to sit below the Maxwell-stress torque.</p>`;
+  } else {
+    const cl = r.coreLoss;
+    $("#crossTitle").textContent = "One electrical period of rotation";
+    el.innerHTML = `
+      <div class="muted" style="font-size:13px">Mean torque over ${r.count} rotor positions across ${r.period_deg}°</div>
+      <div class="big">${r.torqueMean_mNm.toFixed(4)} mN·m</div>
+      <div style="font-size:13px;margin-bottom:8px">Ripple ${pct(r.ripple_pct)} peak-to-peak
+        (${r.torqueMin_mNm.toFixed(4)} – ${r.torqueMax_mNm.toFixed(4)} mN·m)</div>
+      <table>
+        ${(r.harmonics || []).filter(h => h.ofMean_pct > 1).slice(0, 4).map(h =>
+          `<tr class="sub"><td>Harmonic ${h.order} of the electrical period</td><td>${h.ofMean_pct.toFixed(1)}% of mean</td></tr>`).join("")}
+        ${cl.available
+          ? `<tr><td>Core loss at ${cl.frequency_Hz.toFixed(0)} Hz</td><td>${cl.coreLoss_W < 0.01 ? cl.coreLoss_W.toExponential(2) : cl.coreLoss_W.toFixed(3)} W</td></tr>
+             <tr class="sub"><td>Rotor iron · peak |B| amplitude</td><td>${(cl.ironMass_kg * 1e3).toFixed(0)} g · ${fmtB(cl.peakFluxAmplitude_T)}</td></tr>`
+          : `<tr class="sub"><td>Core loss</td><td class="muted">${cl.reason}</td></tr>`}
+      </table>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">${cl.available ? cl.model + " " + cl.caveats[0] : "Ripple and harmonics are solver output; core loss needs the rotor frame, which only the cylindrical mesh recovers exactly."}</p>`;
+  }
 }

@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node cli/serve.js",
     "test": "node tests/run-tests.js",
-    "test:quick": "node tests/run-tests.js --only analytic && node tests/run-tests.js --only ui",
+    "test:quick": "node tests/run-tests.js --only analytic && node tests/metrics.js --cpu-only && node tests/run-tests.js --only ui",
     "test:analytic": "node tests/run-tests.js --only analytic",
     "test:reference": "node tests/run-tests.js --only reference",
     "test:ui": "node tests/run-tests.js --only ui",
@@ -17,7 +17,8 @@
     "cli": "node cli/run.js",
     "solve": "node cli/run.js solve",
     "plan": "node cli/run.js plan",
-    "capabilities": "node cli/run.js capabilities"
+    "capabilities": "node cli/run.js capabilities",
+    "test:metrics": "node tests/run-tests.js --only metrics"
   },
   "devDependencies": {
     "playwright": "^1.49.0"

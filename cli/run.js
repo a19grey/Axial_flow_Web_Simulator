@@ -122,6 +122,9 @@ function writeProgress(ev) {
   else if (ev.phase === "sweep") s = `sweep        ${ev.index + 1}/${ev.total}  ${ev.path} = ${ev.value}`;
   else if (ev.phase === "convergence") s = `refinement   ${ev.index + 1}/${ev.total}  x${ev.factor}  ${ev.cells.toLocaleString()} cells`;
   else if (ev.phase === "rasterize") s = "rasterizing materials";
+  else if (ev.phase === "virtualWork") s = `co-energy    rotor at ${ev.angle_deg.toFixed(3)} deg`;
+  else if (ev.phase === "inductance") s = `inductance   phase ${ev.index + 1}/${ev.total}`;
+  else if (ev.phase === "angle") s = `rotor angle  ${ev.index + 1}/${ev.total}  ${ev.angle_deg.toFixed(2)} deg`;
   else s = ev.phase;
   process.stderr.write(`\r\x1b[2K  ${s}`);
 }
@@ -210,6 +213,11 @@ const COMMANDS = {
     }, [spec, overrides, factors]));
   },
 
+  async virtualwork(page, args) { return simple(page, args, "virtualWork", a => ({ step_deg: a.step ? +a.step : undefined })); },
+  async inductance(page, args) { return simple(page, args, "inductance", () => ({})); },
+  async angle(page, args) { return simple(page, args, "torqueVsAngle", a => ({ count: a.count ? +a.count : undefined })); },
+  async energy(page, args) { return simple(page, args, "energyCheck", () => ({})); },
+
   async validate(page, args) {
     const { spec, overrides } = await loadSpec(args);
     const which = args.case ? String(args.case).split(",") : "all";
@@ -221,6 +229,17 @@ const COMMANDS = {
   }
 };
 
+/* Every study has the same shape: load a spec, apply --set overrides, call one AFS entry point. */
+async function simple(page, args, method, optsFrom) {
+  const { spec, overrides } = await loadSpec(args);
+  const opts = optsFrom(args);
+  return unwrap(await page.evaluate(([s, ov, m, o]) => {
+    const base = s || window.AFS.defaultSpec();
+    for (const [p, v] of ov) window.AFS.setPathOn(base, p, v);
+    return window.AFS[m](base, o);
+  }, [spec, overrides, method, opts]));
+}
+
 const USAGE = `axial-flux headless driver
 
   node cli/run.js capabilities
@@ -229,6 +248,11 @@ const USAGE = `axial-flux headless driver
   node cli/run.js sweep    [spec.json] --path <spec.path> [--from 0 --to 180 --step 15 | --count N | --values a,b,c]
   node cli/run.js validate [--case loop,sphere] [--spec spec.json]
   node cli/run.js convergence [spec.json] [--factors 1,1.4,2,2.8]
+
+  node cli/run.js virtualwork [spec.json] [--step 1.5]    torque again, by co-energy derivative
+  node cli/run.js inductance  [spec.json]                 L matrix, Ld/Lq, reciprocity check
+  node cli/run.js angle       [spec.json] [--count 24]    torque vs rotor angle: ripple, core loss
+  node cli/run.js energy      [spec.json]                 stored energy two ways, as a cross-check
 
   --set design.rotor.airGap_mm=2.5     override any spec field, repeatable
   -o out.json                          write the result JSON to a file as well as stdout

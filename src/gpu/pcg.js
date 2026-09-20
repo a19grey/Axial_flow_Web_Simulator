@@ -55,6 +55,28 @@ export async function runPCG(G, B, { tolerance = 1e-5, maxIterations = 4000, che
   return { iters: it, rel, ms: performance.now() - t0, hist, reason, converged: reason === "tolerance" };
 }
 
+/* The per-phase free-space field, 9 floats per cell: three components for each of three phases at
+ * unit current, exactly as the Biot-Savart kernel left them.
+ *
+ * This is 36 bytes a cell, four times the size of anything else read back, so it is fetched only
+ * when a caller asks — the flux-linkage and inductance metrics are the only things that need it.
+ * The staging buffer is created and destroyed per call rather than living in the buffer set, so a
+ * plain solve never pays for it.
+ */
+export async function readPhaseH(G, B) {
+  const d = G.device, bytes = 9 * B.N * 4;
+  const staging = d.createBuffer({ size: bytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+  try {
+    const enc = d.createCommandEncoder();
+    enc.copyBufferToBuffer(B.H, 0, staging, 0, bytes);
+    d.queue.submit([enc.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    const H = new Float32Array(staging.getMappedRange().slice(0));
+    staging.unmap();
+    return H;
+  } finally { staging.destroy(); }
+}
+
 /* Copy the source field, and optionally the potential, back to the CPU. */
 export async function readBack(G, B, withPhi) {
   const d = G.device, N = B.N, enc = d.createCommandEncoder();

@@ -6,12 +6,12 @@
  */
 
 import { $, ui, setStatus, setBusy, requestStop, guarded } from "./dom.js";
-import { readSpec, setMeshMode, CONTROLS, SPEC_CHANGED } from "./controls.js";
-import { perfPanel, resultPanel, qualityPanel } from "./panels.js";
-import { drawSweep, drawP2 } from "./plots.js";
+import { readSpec, setMeshMode, syncDualSided, CONTROLS, SPEC_CHANGED } from "./controls.js";
+import { perfPanel, resultPanel, qualityPanel, crossPanel } from "./panels.js";
+import { drawSweep, drawAngleSweep, drawP2 } from "./plots.js";
 import { hookProjectUI, setSolveHook } from "./project.js";
 import { initRenderer, updateScene, updateLegend, hookViewControls } from "../render/renderer.js";
-import { solveMotor, plan } from "../core/api.js";
+import { solveMotor, plan, virtualWork, inductance, torqueVsAngle } from "../core/api.js";
 import { runLoopCase, runSphereCase } from "../core/validate.js";
 import { resultsSummary } from "../core/results.js";
 import { initGPU, onDeviceLost } from "../gpu/device.js";
@@ -57,6 +57,7 @@ $("#solve").onclick = () => guarded(async signal => {
 $("#sweep").onclick = () => guarded(async signal => {
   const base = readSpec();
   ui.sweep = { pts: [], base };
+  ui.angle = null;
   drawSweep();
   const t0 = performance.now();
   for (let g = 0; g <= 180; g += 15) {
@@ -84,6 +85,33 @@ $("#vSphere").onclick = () => guarded(async signal => {
   show(sol);
   setStatus(`Sphere test ${report.pass ? "passed" : "FAILED"}: mean interior B_z is ${report.meanInsideError_pct.toFixed(2)}% from analytic, tolerance ${report.tolerance_pct.toFixed(1)}%.`);
 });
+
+/* The cross-checks. Each runs several solves, so each reports its own cost on the status line. */
+const CROSS = {
+  xVirtual: { kind: "virtualWork", run: (spec, o) => virtualWork(spec, o),
+    status: r => `Virtual work gives ${r.torqueVirtualWork_mNm.toFixed(4)} mN·m against ${r.torqueMaxwellStress_mNm.toFixed(4)} from Maxwell stress — ${r.disagreement_pct.toFixed(2)}% apart, over ${r.solves} solves.` },
+  xInduct: { kind: "inductance", run: (spec, o) => inductance(spec, o),
+    status: r => `Ld ${(r.dq_H.total.Ld * 1e6).toFixed(2)} µH, Lq ${(r.dq_H.total.Lq * 1e6).toFixed(2)} µH. Reciprocity holds to ${r.reciprocity.asymmetry_pct.toFixed(3)}%.` },
+  xAngle: { kind: "angle", run: (spec, o) => torqueVsAngle(spec, o), plot: drawAngleSweep,
+    status: r => `Mean torque ${r.torqueMean_mNm.toFixed(4)} mN·m over ${r.count} positions, ripple ${r.ripple_pct === null ? "—" : r.ripple_pct.toFixed(1) + "%"}.` }
+};
+for (const [id, c] of Object.entries(CROSS)) {
+  const el = $("#" + id);
+  if (el) el.onclick = () => guarded(async signal => {
+    setStatus("Running the cross-check — this takes several solves.");
+    const r = await c.run(readSpec(), { onProgress: crossProgress, signal });
+    crossPanel(c.kind, r);
+    c.plot && c.plot(r);
+    setStatus(c.status(r));
+  });
+}
+
+const crossProgress = ev => {
+  if (ev.phase === "virtualWork") setStatus(`Co-energy: solving with the rotor at ${ev.angle_deg.toFixed(3)}°…`);
+  else if (ev.phase === "inductance") setStatus(`Inductance: unit current in phase ${"ABC"[ev.index]}, ${ev.index + 1} of ${ev.total}…`);
+  else if (ev.phase === "angle") setStatus(`Rotor position ${ev.index + 1} of ${ev.total}, θ = ${ev.angle_deg.toFixed(2)}°…`);
+  else onProgress(ev);
+};
 
 $("#stop").onclick = requestStop;
 
@@ -122,6 +150,7 @@ async function refreshPlan() {
 }
 
 document.querySelectorAll("[data-mesh]").forEach(b => b.onclick = () => { setMeshMode(b.dataset.mesh); schedulePlan(); });
+$("#dual")?.addEventListener("change", syncDualSided);
 for (const id of Object.keys(CONTROLS)) { const el = $("#" + id); if (el) el.addEventListener("input", schedulePlan); }
 document.addEventListener(SPEC_CHANGED, schedulePlan);
 
@@ -138,6 +167,7 @@ onDeviceLost(info => setStatus(`The GPU device was lost (${info.message}). Try a
 drawSweep();
 drawP2();
 setMeshMode("uniform");
+syncDualSided();
 hookViewControls();
 updateLegend();
 hookProjectUI();

@@ -50,6 +50,9 @@ const M4 = {
  * span — which is exactly what periodicity means, and is how a one-pole-pair sector still draws the
  * whole machine — and the interpolated (B_r, B_theta) are rotated back into (B_x, B_y).
  */
+/* The lowest solid part of the machine: the lower rotor, the back plate, or just the board. */
+const lowestPart = g => (g.dual ? g.zMY : g.back ? g.zBB : -1);
+
 export function makeSampler(sol) {
   const { job, Bx, By, Bz } = sol, m = job.mesh;
   const { nx, ny, nz, xc, yc, zc } = m;
@@ -419,7 +422,7 @@ export function updateScene(sol, keepView) {
   for (let iz = 1; iz < nz - 1; iz += 1) for (let iy = 1; iy < ny - 1; iy += stepY) for (let ix = 1; ix < nx - 1; ix += 2) {
     const r = cyl ? mesh.xc[ix] : Math.hypot(mesh.xc[ix], mesh.yc[iy]);
     const z = mesh.zc[iz];
-    if (job.kind === "motor" && (r > job.g.Rro + 4 || z < (job.p.back ? job.g.zBB : -1) - 3 || z > job.g.zYT + 3)) continue;
+    if (job.kind === "motor" && (r > job.g.Rro + 4 || z < lowestPart(job.g) - 3 || z > job.g.zYT + 3)) continue;
     const k = (iz * ny + iy) * nx + ix; mag.push(Math.hypot(sol.Bx[k], sol.By[k], sol.Bz[k])); bzs.push(Math.abs(sol.Bz[k]));
   }
   V.bScale = pctl(mag, 0.99) * 1e3; V.bzScale = pctl(bzs, 0.99) * 1e3;
@@ -435,7 +438,7 @@ export function updateScene(sol, keepView) {
   zs.min = V.box[0][2]; zs.max = V.box[1][2]; zs.step = mesh.hMin / 2;
   if (!keepView) {
     V.opt.sliceZ = job.kind === "motor" ? (Math.max(...job.zLay) + job.g.zTB) / 2 : 0;
-    const zc = job.kind === "motor" ? ((job.p.back ? job.g.zBB : -1) + job.g.zYT) / 2 : 0, R = job.kind === "motor" ? job.g.Rro : job.kind === "loop" ? job.R * 1.6 : job.a * 2.2;
+    const zc = job.kind === "motor" ? (lowestPart(job.g) + job.g.zYT) / 2 : 0, R = job.kind === "motor" ? job.g.Rro : job.kind === "loop" ? job.R * 1.6 : job.a * 2.2;
     V.home = { az: -2.25, el: 0.55, dist: R * 2.7, target: [0, 0, zc] }; Object.assign(V.cam, JSON.parse(JSON.stringify(V.home)));
   }
   zs.value = V.opt.sliceZ;
@@ -477,10 +480,10 @@ function frame() {
   if (o.pcb) drawMesh(V.mesh.pcb, V.pl.mesh, V.bgMesh);
   drawMesh(V.mesh.traces, V.pl.mesh, V.bgMesh);
   if (o.back) drawMesh(V.mesh.back, V.pl.mesh, V.bgMesh);
-  if (o.rotor === "solid") drawMesh(V.mesh.rotor, V.pl.mesh, V.bgMesh);
+  if (o.rotor === "solid") { drawMesh(V.mesh.rotor, V.pl.mesh, V.bgMesh); drawMesh(V.mesh.rotorLower, V.pl.mesh, V.bgMesh); }
   if (o.lines && V.lines) { p.setPipeline(V.pl.lines); p.setBindGroup(0, V.lines.bg); p.draw(6, V.lines.count); }
   if (o.slice !== "off" && V.sliceBuf) { p.setPipeline(V.pl.slice); p.setBindGroup(0, V.bgSlice); p.setVertexBuffer(0, V.sliceBuf.buf); p.draw(V.sliceBuf.count); }
-  if (o.rotor === "ghost") drawMesh(V.mesh.rotor, V.pl.ghost, V.bgGhost);
+  if (o.rotor === "ghost") { drawMesh(V.mesh.rotor, V.pl.ghost, V.bgGhost); drawMesh(V.mesh.rotorLower, V.pl.ghost, V.bgGhost); }
   p.end();
   const q = enc.beginRenderPass({ colorAttachments: [{ view: V.ctx.getCurrentTexture().createView(), loadOp: "clear", clearValue: { r: 0, g: 0, b: 0, a: 1 }, storeOp: "store" }] });
   q.setPipeline(V.pl.final); q.setBindGroup(0, V.bgFinal); q.draw(3); q.end();

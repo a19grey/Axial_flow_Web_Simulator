@@ -6,7 +6,7 @@ import { coefs } from "./assemble.js";
 import { initGPU, beginErrorScope, endErrorScope } from "../gpu/device.js";
 import { ensureBuffers } from "../gpu/buffers.js";
 import { runBiotSavart } from "../gpu/biotsavart.js";
-import { runPCG, readBack, dispatch } from "../gpu/pcg.js";
+import { runPCG, readBack, readPhaseH, dispatch } from "../gpu/pcg.js";
 
 /* Three-phase currents for rotor angle theta (mechanical) and current angle gamma (electrical,
  * measured from the rotor d-axis). */
@@ -16,7 +16,7 @@ export function phaseCurrents(p) {
 }
 
 export async function solveJob(job, opts = {}) {
-  const { onProgress, signal, currents, uniformH, skipPCG, solver = {} } = opts;
+  const { onProgress, signal, currents, uniformH, skipPCG, withPhaseFields, solver = {} } = opts;
   const G = await initGPU();
   const B = ensureBuffers(G, job), d = G.device, t = {};
 
@@ -54,9 +54,11 @@ export async function solveJob(job, opts = {}) {
   t0 = performance.now();
   const { Hs, phi } = await readBack(G, B, !skipPCG);
   const F = fieldB(job, Hs, phi);
+  // Only the flux-linkage metrics want this, and it is four times the size of the field itself.
+  const H = withPhaseFields && job.segs ? await readPhaseH(G, B) : null;
   t.post = performance.now() - t0;
 
-  return { job, ...F, Hs, phi, pcg, t, N: B.N, nseg: job.segs ? job.segs.length / 8 : 0, adapter: G.name };
+  return { job, ...F, Hs, phi, H, pcg, t, N: B.N, nseg: job.segs ? job.segs.length / 8 : 0, adapter: G.name };
 }
 
 /* Flux-conservative reconstruction: B on each face is mu_face (Hs - dphi/dn), exactly the flux the

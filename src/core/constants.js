@@ -28,3 +28,38 @@ export const SOLVER_DEFAULTS = {
   checkInterval: 32,   // CG iterations between residual read-backs
   stallPatience: 6     // consecutive non-improving checks before giving up
 };
+
+/* Material properties used by the derived metrics. None of these enter the field solve; they turn
+ * a solved field into engineering numbers, and every one of them is overridable in the spec. */
+export const MATERIALS = {
+  // Copper at 20 C, and its temperature coefficient of resistivity.
+  copperResistivity_ohm_m: 1.68e-8,
+  copperTempCoeff_perK: 3.93e-3,
+  copperDensity_kg_m3: 8960,
+  // FR-4 laminate, without the copper.
+  boardDensity_kg_m3: 1850,
+  // Electrical steel / SMC. 7650 is typical of a silicon steel lamination stack.
+  ironDensity_kg_m3: 7650
+};
+
+/* Core loss, anchored to the number on a lamination datasheet rather than to fitted coefficients.
+ *
+ * A grade designation states its own specific loss: "M400-50A" is 4.00 W/kg at 1.5 T and 50 Hz.
+ * Scaling that with the classical Steinmetz exponents,
+ *
+ *     p(B, f) = p_ref (B/B_ref)^beta (f/f_ref)^alpha
+ *
+ * gives a loss estimate traceable to a published figure. The exponents are the usual textbook
+ * values and are *not* a fit to any particular steel; replace them with a datasheet fit before
+ * quoting a loss number as anything but an order of magnitude.
+ */
+export const CORE_LOSS_DEFAULTS = {
+  specificLoss_W_per_kg: 4.0,
+  atFlux_T: 1.5,
+  atFrequency_Hz: 50,
+  fluxExponent: 2.0,
+  frequencyExponent: 1.6
+};
+
+/* Copper foil weight. 1 oz/ft^2 is 34.8 um. */
+export const COPPER_THICKNESS_UM = 35;

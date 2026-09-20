@@ -28,7 +28,14 @@ const AFS = {
   solve: (spec, opts) => call(() => api.solve(spec, withProgress(opts))),
   sweep: (spec, sweepSpec, opts) => call(() => api.sweep(spec, sweepSpec, withProgress(opts))),
   validate: (which, spec, opts) => call(() => api.validate(which, spec, withProgress(opts))),
-  convergence: (spec, opts) => call(() => api.convergence(spec, withProgress(opts)))
+  convergence: (spec, opts) => call(() => api.convergence(spec, withProgress(opts))),
+
+  /* Cross-checks and characterization. Each costs several solves, so each is its own call rather
+   * than something every solve pays for. */
+  virtualWork: (spec, opts) => call(() => api.virtualWork(spec, withProgress(opts))),
+  inductance: (spec, opts) => call(() => api.inductance(spec, withProgress(opts))),
+  torqueVsAngle: (spec, opts) => call(() => api.torqueVsAngle(spec, withProgress(opts))),
+  energyCheck: (spec, opts) => call(() => api.energyCheck(spec, withProgress(opts)))
 };
 
 function withProgress(opts = {}) {

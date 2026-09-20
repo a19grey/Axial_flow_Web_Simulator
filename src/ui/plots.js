@@ -36,8 +36,35 @@ function drawPlot(cv, cfg) {
   let lx = m.l + 10; g.textAlign = "left"; g.textBaseline = "middle";
   for (const s of cfg.series) { g.fillStyle = s.color; g.fillRect(lx, m.t + 8, 10, 3); g.fillStyle = ink; g.fillText(s.label, lx + 14, m.t + 10); lx += g.measureText(s.label).width + 34; }
 }
+/* Torque through one electrical period of rotor rotation, on the same canvas as the current-angle
+ * sweep. The two are alternatives — one holds the rotor still and turns the current vector, the
+ * other turns both together — so whichever ran last owns the plot. */
+export function drawAngleSweep(r) {
+  ui.sweep = null;
+  ui.angle = r;
+  const cv = $("#sweepPlot"), t = $("#p1title");
+  if (t) t.innerHTML = `Torque vs rotor angle <span class="muted" style="font-weight:400">— one electrical period, ripple ${r.ripple_pct === null ? "—" : r.ripple_pct.toFixed(1) + "%"} peak-to-peak</span>`;
+  const pts = r.points.filter(p => p.torque_mNm !== null).map(p => [p.rotorAngle_deg, p.torque_mNm]);
+  if (!pts.length) return;
+  // Close the loop: the waveform is periodic, so the first point is also the last.
+  const closed = [...pts, [pts[0][0] + r.period_deg, pts[0][1]]];
+  const x0 = closed[0][0], x1 = closed[closed.length - 1][0];
+  const ys = pts.map(p => p[1]), lo = Math.min(0, ...ys), hi = Math.max(...ys);
+  const pad = 0.12 * Math.max(1e-9, hi - lo);
+  const mean = ys.reduce((a, b) => a + b, 0) / ys.length;
+  drawPlot(cv, { xr: [x0, x1], yr: [lo - pad, hi + pad], xticks: niceTicks(x0, x1, 6), yticks: niceTicks(lo - pad, hi + pad),
+    xfmt: v => v.toFixed(0) + "°", yfmt: v => (Math.abs(hi) < 1 ? v.toFixed(3) : v.toFixed(1)),
+    xlabel: "rotor angle (mechanical)", ylabel: "torque (mN·m)",
+    series: [{ pts: [[x0, mean], [x1, mean]], color: css("--muted"), label: `mean ${mean.toFixed(4)} mN·m` },
+             { pts: closed, color: css("--gpu"), label: "GPU solve per position" }] });
+}
+
 export function drawSweep() {
   const sw = ui.sweep, cv = $("#sweepPlot");
+  // The rotor-angle plot owns the canvas until a current-angle sweep replaces it.
+  if (!sw && ui.angle) { drawAngleSweep(ui.angle); return; }
+  const title = $("#p1title");
+  if (title && !ui.angle) title.innerHTML = `Torque vs current angle <span class="muted" style="font-weight:400">— reluctance torque should follow sin 2γ</span>`;
   if (!sw || !sw.pts.length) { drawPlot(cv, { xr: [0, 180], yr: [-1, 1], xticks: niceTicks(0, 180, 6), yticks: niceTicks(-1, 1), xfmt: v => v + "°", yfmt: v => v, xlabel: "current angle γ (electrical)", ylabel: "torque (mN·m)", series: [] }); return; }
   const pts = sw.pts.map(([g, T]) => [g, T * 1e3]);
   let a = 0, b = 0, ss = 0, cc = 0, sc = 0;

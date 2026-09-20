@@ -14,6 +14,7 @@ import { motorMetrics } from "./torque.js";
 import { resultsSummary } from "./results.js";
 import { runLoopCase, runSphereCase } from "./validate.js";
 import { convergenceStudy } from "./convergence.js";
+import { virtualWorkTorque, inductance as inductanceStudy, torqueVsAngle as angleStudy, energyConsistency } from "./studies.js";
 import { capabilities as gpuCapabilities, initGPU, isSoftwareAdapter } from "../gpu/device.js";
 import { bufferBytes } from "../gpu/buffers.js";
 import { meshStats } from "./mesh.js";
@@ -115,7 +116,9 @@ export async function solveMotor(specIn, opts = {}) {
   // Yield once so a browser caller can paint the status before the rasterizer blocks the thread.
   await Promise.resolve();
   const job = buildMotor(p);
-  const I = phaseCurrents(p);
+  // A study may need the currents held fixed while the rotor turns; an ordinary solve takes them
+  // from the operating point.
+  const I = opts.currents ?? phaseCurrents(p);
   const sol = await solveJob(job, { ...opts, currents: I, solver: spec.solver });
   sol.I = I;
   sol.m = motorMetrics(sol);
@@ -136,6 +139,24 @@ export async function solve(specIn, opts = {}) {
     warnings: sol.warnings
   };
 }
+
+/* ---- cross-checks and characterization -------------------------------------------------------- */
+
+/* Torque a second time, by a method that shares nothing with the Maxwell stress tensor but the
+ * field: the derivative of magnetic co-energy with rotor position at constant current. Two extra
+ * solves either side of the operating point, plus one at it. */
+export async function virtualWork(specIn, opts = {}) { return virtualWorkTorque(specIn, opts); }
+
+/* The phase inductance matrix, Ld and Lq, and the reciprocity check that comes free with them.
+ * Three solves at unit current. */
+export async function inductance(specIn, opts = {}) { return inductanceStudy(specIn, opts); }
+
+/* Torque through one electrical period of rotor rotation: mean torque, ripple, harmonics, and —
+ * on a cylindrical mesh, where the rotor frame is an exact index shift — core loss. */
+export async function torqueVsAngle(specIn, opts = {}) { return angleStudy(specIn, opts); }
+
+/* Stored energy by two routes, from the field and from the inductance matrix. Four solves. */
+export async function energyCheck(specIn, opts = {}) { return energyConsistency(specIn, opts); }
 
 /* ---- sweeps ---------------------------------------------------------------------------------- */
 

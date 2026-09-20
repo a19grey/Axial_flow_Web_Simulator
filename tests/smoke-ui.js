@@ -294,6 +294,74 @@ async function main() {
     ok("cylindrical mesh solves from the page", /Solved\. Torque/.test(cyl.status), cyl.status.trim());
     ok("the 3D view survives a cylindrical solve", cyl.canvas > 0);
 
+    /* ---- dual-sided rotor and the derived metrics panel ---------------------------------------
+     * The page is already in cylindrical mode here, which is what a dual-sided machine wants. */
+    const dual = await page.evaluate(async () => {
+      const chk = document.getElementById("dual");
+      chk.checked = true;
+      chk.dispatchEvent(new Event("change", { bubbles: true }));
+      chk.dispatchEvent(new Event("input", { bubbles: true }));
+      await new Promise(r => setTimeout(r, 400));
+      const backDisabled = document.getElementById("backT").disabled;
+      const noteShown = !document.getElementById("dualNote").hidden;
+      document.getElementById("solve").click();
+      await new Promise(r => { const t = setInterval(() => { if (!document.getElementById("solve").disabled) { clearInterval(t); r(); } }, 50); });
+      const res = document.getElementById("res").textContent;
+      chk.checked = false;
+      chk.dispatchEvent(new Event("change", { bubbles: true }));
+      chk.dispatchEvent(new Event("input", { bubbles: true }));
+      return { backDisabled, noteShown, res, status: document.getElementById("status").textContent };
+    });
+    ok("dual-sided disables the back plate controls", dual.backDisabled && dual.noteShown);
+    ok("a dual-sided machine solves from the page", /Solved\. Torque/.test(dual.status), dual.status.trim());
+    okPhysics("both rotors are reported", /Upper rotor/.test(dual.res) && /Lower rotor/.test(dual.res),
+              dual.res.match(/Imbalance between them\s*([\d.]+%)/)?.[1] || "");
+    ok("the derived metrics reach the panel",
+       /Phase resistance/.test(dual.res) && /Torque density/.test(dual.res) && /Meshed volume vs exact/.test(dual.res));
+
+    /* ---- a cross-check runs from its button -----------------------------------------------------
+     * Inductance is the cheapest of the three (three solves, no rotor motion), so it is the one the
+     * smoke test clicks. */
+    const xc = await page.evaluate(async () => {
+      document.getElementById("xInduct").click();
+      await new Promise(r => { const t = setInterval(() => { if (!document.getElementById("solve").disabled) { clearInterval(t); r(); } }, 50); });
+      return { status: document.getElementById("status").textContent,
+               hidden: document.getElementById("crossPanel").hidden,
+               title: document.getElementById("crossTitle").textContent,
+               body: document.getElementById("cross").textContent };
+    });
+    ok("the inductance cross-check runs from its button", /Reciprocity holds/.test(xc.status), xc.status.trim());
+    ok("and fills the cross-check panel", !xc.hidden && /Inductance/.test(xc.title) && /Saliency ratio/.test(xc.body));
+
+    /* ---- the rotor-angle study takes over the sweep plot ---------------------------------------
+     * Six positions only: this is about the plot and the panel being wired, not about ripple. */
+    const ang = await page.evaluate(async () => {
+      const api = await import("./src/core/api.js");
+      const plots = await import("./src/ui/plots.js");
+      const c = await import("./src/ui/controls.js");
+      const r = await api.torqueVsAngle(c.readSpec(), { count: 6 });
+      plots.drawAngleSweep(r);
+      return { title: document.getElementById("p1title").textContent,
+               points: r.points.length, ripple: r.ripple_pct, core: r.coreLoss.available };
+    });
+    ok("the rotor-angle study plots on the sweep canvas", /Torque vs rotor angle/.test(ang.title), ang.title.trim());
+    ok("it returns one point per position", ang.points >= 4, `${ang.points} positions`);
+    okPhysics("and a ripple figure", Number.isFinite(ang.ripple), `${ang.ripple?.toFixed(1)}%`);
+
+    /* ---- the page must not be wider than the window ---------------------------------------------
+     * Twice now a grid without an explicit track has let a fixed-size canvas set a max-content
+     * width in the thousands of pixels and stretched the whole page sideways. It is invisible in a
+     * functional test and obvious in a screenshot, so it gets an assertion. */
+    const overflow = await page.evaluate(() => {
+      const w = window.innerWidth;
+      const wide = [...document.querySelectorAll("body *")]
+        .filter(e => Math.round(e.getBoundingClientRect().right) > w + 2)
+        .map(e => e.tagName + (e.id ? "#" + e.id : "") + (typeof e.className === "string" && e.className ? "." + e.className.split(" ")[0] : ""));
+      return { scrollWidth: document.body.scrollWidth, innerWidth: w, wide: [...new Set(wide)].slice(0, 6) };
+    });
+    ok("nothing overflows the window horizontally", overflow.scrollWidth <= overflow.innerWidth + 2,
+       `page ${overflow.scrollWidth}px in a ${overflow.innerWidth}px window${overflow.wide.length ? ": " + overflow.wide.join(", ") : ""}`);
+
     /* ---- view controls ----------------------------------------------------------------------------- */
     const view = await page.evaluate(async () => {
       document.querySelector("[data-slice='gap']").click();

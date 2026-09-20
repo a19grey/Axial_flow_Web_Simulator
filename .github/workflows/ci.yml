@@ -10,7 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     # CI runners have no GPU, so everything here runs on SwiftShader. Fields are still correct, so
     # the analytic cases are a real check; timings are meaningless and the suites that need a real
-    # GPU (reference comparison, convergence studies) are left to run locally.
+    # GPU (reference comparison, convergence studies, the solver half of the metric cross-checks)
+    # are left to run locally.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +29,12 @@ jobs:
       # Grid 80 rather than the default 128: it clears both tolerances with margin (loop 0.26%
       # against 1%, sphere 7.7% against 9%) and is four times less work. At 128 this step ran for
       # over five minutes on a runner's software adapter. See docs/numerics.md.
+      # Closed forms, exact volume identities and the winding-period derivation. None of it needs a
+      # GPU, so the runner gets the same answer a workstation does, in milliseconds.
+      - name: Closed-form metric checks
+        timeout-minutes: 2
+        run: node tests/metrics.js --cpu-only
+
       - name: Analytic validation cases
         timeout-minutes: 6
         run: node cli/run.js validate --allow-software --quiet --set mesh.cellsAcrossDiameter=80

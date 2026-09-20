@@ -1,0 +1,61 @@
+{
+  "format": "axial-flux-project",
+  "version": 2,
+  "name": "370 mm dual-rotor scale test, 3 mm gaps",
+  "notes": "The same 370 mm scale test with a rotor on both sides of the board, which is the topology every axial-flux machine of this size actually uses: the stator works into two gaps and each rotor is the other's flux return, so there is no back plate. Doubling the rotor roughly doubles the torque and the mass. The two rotors are exact mirror images, so their reported imbalance is a direct measure of how symmetric the mesh is - it should stay well under a percent. As with the single-sided case this is a scale test of the mesh and solver, not a model of a YASA motor: the stator is still a PCB coreless winding and the rotor still a low-permeability salient-pole ring, because magnets and high-mu steel are outside what the reduced scalar potential can represent. See docs/limitations.md. One number here is deliberately left ugly: the winding is a scale placeholder and is nowhere near electrically sized for the 40 A it is driven at, so the reported copper loss is enormous. That is the derived metrics working - they say what the modelled copper would actually do rather than what the field solve wishes it would.",
+  "design": {
+    "stator": {
+      "poles": 8,
+      "copperLayers": 4,
+      "innerRadius_mm": 110,
+      "outerRadius_mm": 185,
+      "turnsPerLayer": 16,
+      "peakCurrent_A": 40,
+      "thickness_mm": 1.6,
+      "tracePitch_mm": 2.0,
+      "traceWidth_mm": 1.2,
+      "edgeMargin_mm": 1.0,
+      "copperThickness_um": 105
+    },
+    "rotor": {
+      "airGap_mm": 3,
+      "mu_r": 60,
+      "poleHeight_mm": 12,
+      "yokeThickness_mm": 16,
+      "poleArcFraction": 0.6,
+      "dualSided": true
+    },
+    "backPlate": {
+      "enabled": false,
+      "mu_r": 60,
+      "thickness_mm": 16,
+      "gapBelowPcb_mm": 3
+    }
+  },
+  "operatingPoint": {
+    "rotorAngle_deg": 0,
+    "currentAngle_elecDeg": 45,
+    "speed_rpm": 1500
+  },
+  "mesh": {
+    "mode": "cylindrical",
+    "activeCellsAcrossDiameter": 200,
+    "cellsAcrossAirGap": 6,
+    "cellsAcrossPoleHeight": 5,
+    "cellsAcrossYoke": 4,
+    "cellsAcrossPcb": 3,
+    "cellsAcrossBackPlate": 4,
+    "cellsAcrossBackGap": 3,
+    "growthRatio": 1.22,
+    "farFieldCellFactor": 10,
+    "maxCells": 40000000,
+    "cellsAcrossPoleArc": 80,
+    "sector": true
+  },
+  "solver": {
+    "tolerance": 1e-05,
+    "maxIterations": 6000,
+    "checkInterval": 32,
+    "stallPatience": 6
+  }
+}

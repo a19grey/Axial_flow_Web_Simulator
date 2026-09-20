@@ -123,6 +123,143 @@ what a runner has:
 Grid 48 is the first that fails, so 64 is the floor and 80 leaves a margin on both the tolerance
 and the clock.
 
+## Torque by two independent methods
+
+Maxwell stress integrates the field over a surface in the air gap. Virtual work differentiates the
+magnetic co-energy, a volume integral over the whole domain, with respect to rotor position at
+constant current. They share the field and nothing else, so their agreement says something that no
+amount of surface-to-surface comparison can.
+
+| | Virtual work | Maxwell stress | Apart |
+|---|---|---|---|
+| 370 mm scale case | 3761.98 mN·m | 3765.47 mN·m | **0.09%** |
+| 80 mm machine, preset mesh | 0.12096 mN·m | 0.11897 mN·m | 1.67% |
+
+The small machine sits in the band it always sits in: its reluctance torque is a difference between
+two larger reluctances, so it carries the discretization error of both. Refining its mesh by 0.7,
+1.0, 1.4 and 2.0 gave disagreements of 0.93%, 1.67%, 0.58% and 1.28% — a band, with no trend.
+
+The derivative is taken from a symmetric stencil, not a single central difference. Over one degree
+of rotation the material co-energy changes by about a percent, which is uncomfortably close to
+where the step is either too large to be a derivative or too small to be above the noise. Sampling
+seven points gives the 2nd-, 4th- and 6th-order estimates at once:
+
+| Stencil order | 2 | 4 | 6 |
+|---|---|---|---|
+| 370 mm torque, mN·m | 3735.83 | 3771.08 | 3761.98 |
+
+The two-point estimate alone would have read 0.8% low and looked like a real disagreement. The
+spread across orders is reported with the answer.
+
+**The co-energy has to be summed on faces, not at cell centres.** This is not a refinement. The
+solver's unknowns are face fluxes, and the discrete statement that ∇·B = 0 is a statement about
+those and nothing else; only a face sum inherits it. Separately, Hₛ is singular at the filaments,
+so cell-centre B and cell-centre Hₛ sample that singularity differently and their difference near a
+trace is two large mismatched numbers. Summed at cell centres, the material inductance of the 80 mm
+machine came out at 37 mH against a free-space 29 µH — a factor of a thousand — and the energy
+computed two ways disagreed by 25%. On faces the same two routes agree to 0.06%.
+
+## Inductance
+
+Split into the half that comes from the winding alone and the half the material adds:
+L = L₀ + ΔL. L₀ is Neumann's double integral over the filaments, in closed form over all space;
+ΔL comes from the solved field by reciprocity, ΔL_jk = ∫ H_sj·(B_k − μ₀H_sk) dV.
+
+L₀ is checked against a case with an exact answer — a circular loop, L = μ₀R(ln(8R/GMD) − 2):
+
+| Loop segments | 128 | 256 | 512 |
+|---|---|---|---|
+| Error against the closed form | −0.62% | −0.34% | −0.20% |
+
+The residual is the polygon perimeter, which is why it falls as the loop is refined rather than
+settling on a bias.
+
+Three properties then have to hold, and all three are asserted:
+
+| Property | Why it must hold | Measured |
+|---|---|---|
+| L_jk = L_kj | reciprocity is a theorem | 0.0034% worst asymmetry |
+| L₀ has no saliency | the free-space matrix of a symmetric 3-phase winding is circulant | 0.6 pH out of 32.9 µH |
+| reciprocity error falls under refinement | it is discretization, not a bug | 6.5× smaller on doubling the angular mesh |
+
+That last row is what makes the asymmetry usable as an error bar rather than a curiosity. Measured
+on the 80 mm machine, angular cells per pole pitch against worst asymmetry:
+
+| Cells per pole pitch | 16 | 32 | 64 |
+|---|---|---|---|
+| Reciprocity asymmetry | 0.098% | 0.022% | 0.0043% |
+
+Roughly fourth-order in the angular cell count — faster than the torque converges, so it is a
+sensitive probe rather than a proxy.
+
+The 80 mm machine reads Ld = 59.8 µH, Lq = 57.7 µH, of which 32.9 µH is air-core and identical in
+both axes. All of the saliency is in the material response, as it must be: the winding does not
+move, so L₀ cannot depend on rotor angle.
+
+## Rasterized volume against exact volume
+
+Every region of the machine is an annular sector extrusion with a volume known in closed form. What
+the mesh actually laid down is accumulated as the rasterizer runs, so the two can be compared
+directly — a check on the discretization that involves no field at all.
+
+| Mesh | Worst region error |
+|---|---|
+| Cylindrical | 1.3 × 10⁻¹²% |
+| Graded Cartesian | 0.016% |
+| Uniform Cartesian | 0.025% |
+
+Cylindrical is exact by construction: every region is a coordinate box, so the filled fraction is a
+product of three closed-form one-dimensional overlaps. The Cartesian figures are the in-plane
+staircase, softened by 4×4 supersampling.
+
+This check found a real bug on its first run. The Cartesian rasterizer was accumulating into an
+undefined array index — silently, because writing past the end of a typed array is a no-op — and
+reported zero volume for every region.
+
+## Torque ripple and skew
+
+One electrical period of rotor rotation is 720/P mechanical degrees: over that span the rotor
+returns to an identical position *and* the phase currents, which advance by 2π, return to their
+starting values.
+
+The 80 mm machine, 12 rotor positions across 180°:
+
+| Pole skew | 0° | 15° | 30° |
+|---|---|---|---|
+| Mean torque | 0.0940 mN·m | 0.0916 mN·m | 0.0867 mN·m |
+| Ripple, peak-to-peak | 85.9% | 76.8% | 43.5% |
+
+Skew halves the ripple for 8% of the mean torque, which is what skew is for. The ripple is almost
+entirely the 6th harmonic of the electrical period — the classical harmonic for a three-phase
+machine with a non-sinusoidal MMF — and the machine has a lot of it, being a concentrated-winding
+salient-pole reluctance motor with no skew by default.
+
+## Core loss, and where it is refused
+
+Core loss is a rotor-frame quantity: a fixed cell in the laboratory frame is iron only part of the
+time, so tracking B there would mix iron and air.
+
+On a cylindrical mesh with uniform angular cells the rotor frame is exactly one index shift away —
+rotate by s cells and cell (i, j, k) of the rotor sits at angular index (j + s) mod nθ — and the
+(r, θ, z) components of B are already in a basis that rotates with it. So the waveform is recovered
+with no interpolation at all. On a Cartesian mesh it is not, and the tool reports core loss as
+unavailable with the reason rather than returning a number it cannot justify.
+
+The loss model is Steinmetz scaling of a datasheet figure, p = p_ref (B/B_ref)^β (f/f_ref)^α,
+applied to each field component separately and summed. Defaults are 4.0 W/kg at 1.5 T and 50 Hz —
+which is what the grade name M400-50A states — with the textbook exponents β = 2, α = 1.6. Those
+exponents are not a fit to any particular steel and are documented as such in the output.
+
+The iron mass the accumulator sums over is recovered from the rasterized permeability field by
+inverting the series blend. On the 80 mm machine it comes to 0.19629 kg against an analytic rotor
+mass of 0.19629 kg.
+
+The dual-rotor 370 mm preset at 1500 rpm reports 0.76 W over 25.3 kg of rotor iron, 0.03 W/kg, with
+a peak flux amplitude of 0.32 T. That is small, and it is *supposed* to be small: in a synchronous
+machine the fundamental armature field is stationary in the rotor frame, so the rotor sees only the
+harmonics. A lab-frame calculation would have reported the whole fundamental as loss and been an
+order of magnitude too high — which is the reason for going to the trouble of the frame shift.
+
 ## Solver
 
 Jacobi-preconditioned conjugate gradients, f32, residual read back once per 32 iterations.

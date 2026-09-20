@@ -18,8 +18,17 @@ import { locate, cellsAcross, planeAreaM, CYLINDRICAL } from "./mesh.js";
 
 const MM = 1e-3;
 
-export function torque(sol, kb) {
-  return sol.job.mesh.kind === CYLINDRICAL ? torqueCylindrical(sol, kb) : torqueCartesian(sol, kb);
+/* Torque on everything between the two z-planes at mesh nodes kb and kt, out to a cylinder /
+ * box that encloses the machine radially.
+ *
+ * Which planes those are is the caller's business: for the single rotor of a conventional machine
+ * kb sits in the air gap and kt above the yoke, and for the lower rotor of a dual-sided machine it
+ * is the other way round. Either way the surface is closed and the sign follows the outward
+ * normals, so a rotor that drags the other way reports a negative torque rather than an absolute
+ * value that hides it.
+ */
+export function torque(sol, kb, kt) {
+  return sol.job.mesh.kind === CYLINDRICAL ? torqueCylindrical(sol, kb, kt) : torqueCartesian(sol, kb, kt);
 }
 
 /* Torque on a closed surface in cylindrical coordinates: an annular disc in the air gap, the
@@ -39,14 +48,13 @@ export function torque(sol, kb) {
  *
  * A sector mesh integrates its own share, so the result is scaled by the number of sectors.
  */
-function torqueCylindrical(sol, kb) {
+function torqueCylindrical(sol, kb, kt) {
   const { job, Bx: Br, By: Bt, Bz } = sol, m = job.mesh;
   const { nx: nr, ny: nt, nz, sz, xc: rc, xe: re, ze, dy: dth, dz, rArea } = m;
 
   // Outer cylinder: far enough out to enclose the rotor, inside the mesh.
   const iOut = Math.min(nr - 1, locate(re, nr, job.g.Rro + 2) + 1);
-  const kt = Math.min(nz - 2, locate(ze, nz, job.g.zYT) + 3);
-  if (!(kt > kb && iOut > 1)) return NaN;
+  if (!(kt > kb && kb >= 1 && kt <= nz - 1 && iOut > 1)) return NaN;
 
   const idx = (i, j, k) => (k * nt + j) * nr + i;
   const avg = (a, b) => 0.5 * (a + b);
@@ -75,7 +83,7 @@ function torqueCylindrical(sol, kb) {
 }
 
 /* Torque on a box whose bottom face is the z-plane at mesh node kb. */
-function torqueCartesian(sol, kb) {
+function torqueCartesian(sol, kb, kt) {
   const { job, Bx, By, Bz } = sol, m = job.mesh;
   const { nx, ny, nz, sy, sz, xe, ye, ze, xc, yc, dx, dy, dz } = m;
 
@@ -85,9 +93,7 @@ function torqueCartesian(sol, kb) {
   const ib = Math.min(nx - 1, locate(xe, nx, Rb) + 1);
   const ja = Math.max(1, locate(ye, ny, -Rb));
   const jb = Math.min(ny - 1, locate(ye, ny, Rb) + 1);
-  // Top face: clear of the rotor yoke by a couple of cells.
-  const kt = Math.min(nz - 2, locate(ze, nz, job.g.zYT) + 3);
-  if (!(ib > ia && jb > ja && kt > kb)) return NaN;
+  if (!(ib > ia && jb > ja && kt > kb && kb >= 1 && kt <= nz - 1)) return NaN;
 
   const idx = (ix, iy, iz) => (iz * ny + iy) * nx + ix;
   const avg = (k1, k2) => [(Bx[k1] + Bx[k2]) / 2, (By[k1] + By[k2]) / 2, (Bz[k1] + Bz[k2]) / 2];
@@ -123,72 +129,106 @@ function torqueCartesian(sol, kb) {
   return T / MU0;
 }
 
-export function motorMetrics(sol) {
-  const { job } = sol, m = job.mesh, g = job.g;
-  const top = Math.max(...job.zLay);
+/* Candidate Maxwell-stress planes inside one air gap, and the mean torque over them.
+ *
+ * A single stress surface is surprisingly sensitive to where it lands relative to the copper and
+ * the pole face: refining only z, with the in-plane mesh held fixed, moved the torque of the 80 mm
+ * machine by up to 2% as the plane hopped between mesh nodes, without the field itself changing
+ * meaningfully. Averaging over every plane that fits removes most of that, and the spread across
+ * them is an honest error bar — unlike two adjacent planes, which agree almost by construction.
+ *
+ * Planes at the extremes of the gap are worse than the middle: right against the copper the field
+ * still carries the trace-by-trace structure, and right under a pole face it carries the pole-edge
+ * singularity. On a finely resolved gap those disagreed with the middle by nearly 20% while the
+ * converged torque was settled to under 1%. Hence the clearance band.
+ */
+const EDGE_CLEARANCE = 0.18;
+const MAX_PLANES = 12;
 
-  /* Candidate stress planes: mesh nodes inside the air gap, clear of the copper and of the rotor
-   * pole face.
-   *
-   * The clearance is a fraction of the gap as well as half a cell. Right next to the copper the
-   * field still carries the trace-by-trace structure, and right under a pole face it carries the
-   * pole-edge singularity; a stress integral taken there is dominated by whatever the mesh happens
-   * to resolve of those. On a finely resolved gap, planes at the extremes disagreed with the
-   * middle by nearly 20% while the converged torque was settled to under 1%. Keeping to the
-   * central band makes both the mean and its spread mean something. */
-  const EDGE_CLEARANCE = 0.18;
-  const gapLo = top, gapHi = g.zTB, gapH = gapHi - gapLo;
+function gapPlanes(m, gapLo, gapHi) {
+  const gapH = gapHi - gapLo;
   const lo = gapLo + EDGE_CLEARANCE * gapH, hi = gapHi - EDGE_CLEARANCE * gapH;
-  const admissible = (zp, kb) => zp - 0.5 * m.dz[kb - 1] > gapLo && zp + 0.5 * m.dz[kb] < gapHi;
   const cands = [], wide = [];
   for (let kb = 1; kb < m.nz - 1; kb++) {
     const zp = m.ze[kb];
-    if (!admissible(zp, kb)) continue;
+    // The plane has to sit in the gap with its neighbouring cell centres either side of it.
+    if (!(zp - 0.5 * m.dz[kb - 1] > gapLo && zp + 0.5 * m.dz[kb] < gapHi)) continue;
     wide.push(kb);
     if (zp >= lo && zp <= hi) cands.push(kb);
   }
   // A coarse gap may have no node in the central band; fall back to whatever fits.
-  if (!cands.length) cands.push(...wide);
-  const zmid = (gapLo + gapHi) / 2;
-
-  /* Integrate on every admissible plane, not two.
-   *
-   * A single Maxwell-stress surface is surprisingly sensitive to where it lands relative to the
-   * copper and the pole face: refining only z, with the in-plane mesh held fixed, moved the torque
-   * of the 80 mm machine by up to 2% as the plane hopped between mesh nodes, without the field
-   * itself changing meaningfully. Averaging over all the planes that fit removes most of that, and
-   * the spread across them is an honest error bar — unlike two adjacent planes, which agree with
-   * each other almost by construction.
-   *
-   * Cost is bounded: the planes share the same top and side faces, and there are only ever a
-   * handful of mesh nodes inside an air gap.
-   */
-  const MAX_PLANES = 12;
-  let planes = cands.slice();
+  let planes = cands.length ? cands : wide;
   if (planes.length > MAX_PLANES) {
     const pick = [];
     for (let i = 0; i < MAX_PLANES; i++) pick.push(planes[Math.round(i * (planes.length - 1) / (MAX_PLANES - 1))]);
     planes = [...new Set(pick)];
   }
-  planes.sort((a, b) => a - b);
+  return { planes: planes.slice().sort((a, b) => a - b), wide };
+}
 
-  const metrics = { planes };
-  metrics.planeZ_mm = planes.map(k => m.ze[k]);
-  metrics.planeTorque = planes.map(kb => torque(sol, kb)).map(v => (Number.isFinite(v) ? v : null));
+/* Torque on one rotor.
+ *
+ * `far` is the plane on the rotor's outer side, beyond its yoke; the gap planes are on the other.
+ * The enclosing surface always runs from the lower index to the higher, so the sign is consistent
+ * whichever side of the stator the rotor is on.
+ */
+function rotorTorque(sol, name, gapLo, gapHi, farZ, farSide) {
+  const m = sol.job.mesh;
+  const { planes, wide } = gapPlanes(m, gapLo, gapHi);
+  const far = farSide > 0
+    ? Math.min(m.nz - 1, locate(m.ze, m.nz, farZ) + 3)
+    : Math.max(1, locate(m.ze, m.nz, farZ) - 2);
+  const pair = kb => (farSide > 0 ? [kb, far] : [far, kb]);
+  const planeTorque = planes.map(kb => {
+    const v = torque(sol, ...pair(kb));
+    return Number.isFinite(v) ? v : null;
+  });
+  const good = planeTorque.filter(v => v !== null);
+  const mean = good.length ? good.reduce((a, b) => a + b, 0) / good.length : null;
+  return {
+    name, planes, wide, far,
+    planeZ_mm: planes.map(k => m.ze[k]),
+    planeTorque,
+    T: good,
+    torque: mean,
+    spread_pct: good.length > 1 && mean ? (Math.max(...good) - Math.min(...good)) / Math.abs(mean) * 100 : null,
+    midGapZ_mm: 0.5 * (gapLo + gapHi),
+    gap: [gapLo, gapHi]
+  };
+}
 
-  const good = metrics.planeTorque.filter(v => v !== null);
-  metrics.T = good;
-  metrics.torque = good.length ? good.reduce((a, b) => a + b, 0) / good.length : null;
-  metrics.torqueSpread_pct = good.length > 1 && metrics.torque
-    ? (Math.max(...good) - Math.min(...good)) / Math.abs(metrics.torque) * 100 : null;
+export function motorMetrics(sol) {
+  const { job } = sol, m = job.mesh, g = job.g;
+  const copperTop = Math.max(...job.zLay), copperBottom = Math.min(...job.zLay);
 
-  /* The two planes nearest mid-gap, the pre-multi-plane definition. Retained so the regression
-   * against the original single-file build keeps comparing like with like. */
-  const nearest = wide.slice().sort((a, b) => Math.abs(m.ze[a] - zmid) - Math.abs(m.ze[b] - zmid)).slice(0, 2).sort((a, b) => a - b);
+  /* One rotor per working gap. A dual-sided machine has two, on the same shaft, so their torques
+   * add — and because they are mirror images of each other, their disagreement is a free check on
+   * the mesh and on the stress integration. */
+  const rotors = [rotorTorque(sol, "upper", copperTop, g.zTB, g.zYT, +1)];
+  if (g.dual) rotors.push(rotorTorque(sol, "lower", g.zMB, copperBottom, g.zMY, -1));
+
+  const metrics = { rotors };
+  const means = rotors.map(r => r.torque).filter(v => v !== null);
+  metrics.torque = means.length ? means.reduce((a, b) => a + b, 0) : null;
+  metrics.T = rotors.flatMap(r => r.T);
+  metrics.planes = rotors[0].planes;
+  metrics.planeZ_mm = rotors.flatMap(r => r.planeZ_mm);
+  metrics.planeTorque = rotors.flatMap(r => r.planeTorque);
+  const spreads = rotors.map(r => r.spread_pct).filter(v => v !== null);
+  metrics.torqueSpread_pct = spreads.length ? Math.max(...spreads) : null;
+  // How far the two rotors of a dual-sided machine disagree. They are mirror images, so anything
+  // beyond the single-rotor surface spread is a meshing asymmetry rather than physics.
+  metrics.rotorImbalance_pct = rotors.length === 2 && metrics.torque
+    ? Math.abs(rotors[0].torque - rotors[1].torque) / Math.abs(metrics.torque / 2) * 100 : null;
+
+  /* The two planes nearest mid-gap of the upper rotor, the pre-multi-plane definition. Retained so
+   * the regression against the original single-file build keeps comparing like with like. */
+  const up = rotors[0], zmid = up.midGapZ_mm;
+  const nearest = up.wide.slice().sort((a, b) => Math.abs(m.ze[a] - zmid) - Math.abs(m.ze[b] - zmid)).slice(0, 2).sort((a, b) => a - b);
   metrics.legacyPlanes = nearest;
   metrics.legacyT = nearest.map(kb => {
-    const i = planes.indexOf(kb);
-    return i >= 0 ? metrics.planeTorque[i] : torque(sol, kb);
+    const i = up.planes.indexOf(kb);
+    return i >= 0 ? up.planeTorque[i] : torque(sol, kb, up.far);
   }).filter(Number.isFinite);
 
   /* Mean |B_z| at exactly mid-gap over the annulus the coils occupy.
@@ -196,6 +236,19 @@ export function motorMetrics(sol) {
    * Sampling the nearest cell layer made this jump by up to 3% as the mesh changed, purely because
    * the layer moved. Interpolating between the two layers that straddle mid-gap makes the metric a
    * property of the field rather than of the mesh. */
+  metrics.gapBz = meanGapBz(sol, zmid);
+  if (rotors.length === 2) metrics.gapBzLower = meanGapBz(sol, rotors[1].midGapZ_mm);
+
+  let bmax = 0;
+  for (let k = 0; k < job.mu.length; k++) if (job.mu[k] > 1.5) bmax = Math.max(bmax, Math.hypot(sol.Bx[k], sol.By[k], sol.Bz[k]));
+  metrics.bmaxMat = bmax;
+  metrics.midGapZ_mm = zmid;
+  metrics.cellsAcrossAirGap = cellsAcross(m.ze, m.nz, copperTop, g.zTB);
+  return metrics;
+}
+
+function meanGapBz(sol, zmid) {
+  const m = sol.job.mesh, job = sol.job;
   const kg = Math.min(m.nz - 2, Math.max(0, locate(m.zc, m.nz, zmid)));
   const z0 = m.zc[kg], z1 = m.zc[kg + 1];
   const w = z1 > z0 ? Math.min(1, Math.max(0, (zmid - z0) / (z1 - z0))) : 0;
@@ -212,15 +265,7 @@ export function motorMetrics(sol) {
       wsum += a;
     }
   }
-  metrics.gapBz = wsum > 0 ? s / wsum : 0;
-
-  let bmax = 0;
-  for (let k = 0; k < job.mu.length; k++) if (job.mu[k] > 1.5) bmax = Math.max(bmax, Math.hypot(sol.Bx[k], sol.By[k], sol.Bz[k]));
-  metrics.bmaxMat = bmax;
-  metrics.kg = kg;
-  metrics.midGapZ_mm = zmid;
-  metrics.cellsAcrossAirGap = cellsAcross(m.ze, m.nz, g.pcbHalf, g.zTB);
-  return metrics;
+  return wsum > 0 ? s / wsum : 0;
 }
 
 /* Value on the axis at z-layer iz, from the four cells surrounding it. The mesh is symmetric about

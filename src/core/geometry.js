@@ -13,14 +13,35 @@ import { gradedAxis, symmetricAxis } from "./grading.js";
 
 export const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
 
+/* The winding layout: how many coils, which phase each carries, and which way round it is wound.
+ *
+ * The default is the classical three-phase concentrated arrangement this tool has always used —
+ * 1.5 x poles coils, phase k mod 3, all wound the same way. An explicit coilCount with a
+ * phasePattern and/or coilSense describes anything else; short patterns repeat, so [0,1,2] and
+ * [0,0,1,1,2,2] both read naturally.
+ */
+export function windingLayout(p) {
+  const count = Math.max(1, Math.round(p.coilCount ?? 1.5 * p.poles));
+  const pat = p.phasePattern && p.phasePattern.length ? p.phasePattern : null;
+  const sen = p.coilSense && p.coilSense.length ? p.coilSense : null;
+  const phase = [], sense = [];
+  for (let k = 0; k < count; k++) {
+    phase.push(pat ? pat[k % pat.length] : k % 3);
+    sense.push(sen ? (sen[k % sen.length] < 0 ? -1 : 1) : 1);
+  }
+  return { count, phase, sense };
+}
+
 /* Concentric trapezoidal turns, one group per coil, `layers` copies stacked in z.
- * Coil k carries phase k mod 3. */
+ * A coil wound the other way round has its outline traversed in reverse, which reverses the
+ * current direction in every one of its segments. */
 export function coilPolys(p) {
-  const Nc = 1.5 * p.poles, half = Math.PI / Nc;
+  const { count: Nc, phase, sense } = windingLayout(p);
+  const half = Math.PI / Nc;
   const pitch = p.pitch, edge = p.edge, nArc = p.arcSegments ?? 10;
   const polys = [];
   for (let k = 0; k < Nc; k++) {
-    const th = k * 2 * Math.PI / Nc, ph = k % 3;
+    const th = k * 2 * Math.PI / Nc, ph = phase[k];
     for (let j = 0; j < p.turns; j++) {
       const d = edge + j * pitch, ri = p.ri + d, ro = p.ro - d;
       const ai = half - d / ri, ao = half - d / ro;
@@ -28,7 +49,7 @@ export function coilPolys(p) {
       const pts = [[ri * Math.cos(th - ai), ri * Math.sin(th - ai)]];
       for (let s = 0; s <= nArc; s++) { const a = th - ao + 2 * ao * s / nArc; pts.push([ro * Math.cos(a), ro * Math.sin(a)]); }
       for (let s = 0; s <= nArc; s++) { const a = th + ai - 2 * ai * s / nArc; pts.push([ri * Math.cos(a), ri * Math.sin(a)]); }
-      polys.push({ pts, ph });
+      polys.push({ pts: sense[k] < 0 ? pts.slice().reverse() : pts, ph, coil: k, sense: sense[k] });
     }
   }
   return polys;
@@ -46,13 +67,29 @@ export function segsFromPolys(polys, zs) {
   return new Float32Array(out);
 }
 
-/* Axial landmarks of the machine, mm, with the PCB mid-plane at z = 0. */
+/* Axial landmarks of the machine, mm, with the PCB mid-plane at z = 0.
+ *
+ * A dual-sided machine carries a second rotor mirrored through z = 0, so the stator works into two
+ * gaps and there is no flux-return plate to add: the opposite rotor is the return path. The back
+ * plate is therefore ignored when dualSided is set (see backPlateActive).
+ */
 export function motorGeom(p) {
   const pcbHalf = p.pcbT / 2;
   const zTB = pcbHalf + p.gap, zTT = zTB + p.tooth, zYT = zTT + p.yoke;
   const zBT = -pcbHalf - p.backGap, zBB = zBT - p.backT;
-  return { pcbHalf, zTB, zTT, zYT, zBT, zBB, Rri: Math.max(1, p.ri - 1), Rro: p.ro + 1 };
+  const dual = !!p.dual;
+  return {
+    pcbHalf, zTB, zTT, zYT, zBT, zBB,
+    dual,
+    // Mirror of the rotor, below the board. zMB is the face nearest the stator.
+    zMB: -zTB, zMT: -zTT, zMY: -zYT,
+    back: backPlateActive(p),
+    Rri: Math.max(1, p.ri - 1), Rro: p.ro + 1
+  };
 }
+
+/* The back plate exists only on a single-sided machine. */
+export const backPlateActive = p => !!p.back && !p.dual;
 
 export function layerZ(p) {
   const base = LAYER_Z[p.layers] || LAYER_Z[2];
@@ -68,7 +105,7 @@ export function motorBox(p) {
   return {
     g, margin,
     L: g.Rro + margin,
-    zmin: (p.back ? g.zBB : -g.pcbHalf) - margin,
+    zmin: (g.dual ? g.zMY : g.back ? g.zBB : -g.pcbHalf) - margin,
     zmax: g.zYT + margin
   };
 }
@@ -84,17 +121,83 @@ export function buildMesh(p) {
 
 /* The angular period of the machine, in mechanical radians, and how many copies make a full turn.
  *
- * The rotor repeats every pole pitch, 2*pi/P. The stator has 1.5*P concentrated coils with phase
- * k mod 3 and a common winding sense, so coils k and k+3 carry the same current and the winding
- * repeats every 3 coils, which is 4*pi/P — two pole pitches. The coarser of the two governs, so
- * the whole machine, currents included, repeats every 4*pi/P: one pole pair, three coils.
+ * Rotating by 2*pi/s must map the machine — rotor, winding, and the currents in it — onto itself.
+ * That needs three things at once:
  *
- * The repeat is plain periodicity rather than anti-periodicity, because same-phase coils here are
- * wound the same way round rather than alternating.
+ *   - the rotor poles to land on rotor poles, so s must divide the pole count;
+ *   - the coils to land on coils, so s must divide the coil count;
+ *   - each coil to land on one of the same phase and the same winding sense, so it carries the
+ *     same current at the same instant.
+ *
+ * The last condition is the one that is easy to assume rather than check. For the default layout
+ * (1.5*P coils, phase k mod 3, all wound alike) the largest valid s is P/2: one pole pair, three
+ * coils, which is what the tool modelled before layouts were adjustable. Any other pattern is
+ * tested here rather than assumed, and a layout with no symmetry simply falls back to the full
+ * turn.
+ *
+ * The repeat is plain periodicity rather than anti-periodicity, because same-phase coils in the
+ * default layout are wound the same way round rather than alternating. A layout that alternates
+ * them has no plain period and is correctly reported as sectors = 1.
  */
 export function angularPeriod(p) {
-  const sectors = Math.max(1, Math.round(p.poles / 2));
-  return { span: 2 * Math.PI / sectors, sectors };
+  const { count, phase, sense } = windingLayout(p);
+  const poles = Math.round(p.poles);
+  for (let s = Math.min(poles, count); s >= 2; s--) {
+    if (poles % s || count % s) continue;
+    const shift = count / s;
+    let ok = true;
+    for (let k = 0; k < count && ok; k++) {
+      const j = (k + shift) % count;
+      ok = phase[j] === phase[k] && sense[j] === sense[k];
+    }
+    if (ok) return { span: 2 * Math.PI / s, sectors: s };
+  }
+  return { span: 2 * Math.PI, sectors: 1 };
+}
+
+/* ---- regions ------------------------------------------------------------------------------- */
+
+/* The magnetic parts of the machine, as a list rather than as branches in the rasterizer.
+ *
+ * Every part of an axial-flux machine is an annular sector extrusion: a radial interval, an axial
+ * interval, and either a full annulus or a regularly repeated arc. Writing them as data means the
+ * rasterizers loop over a list, a second rotor is another two entries rather than another branch,
+ * and the mass calculation can use exactly the same geometry the field solve used.
+ *
+ * `arc` null means the region fills the whole annulus. Otherwise it is `count` arcs each spanning
+ * `fraction` of the pitch, centred at `phase` and skewed linearly with radius by `skew` radians
+ * end to end across r0..r1.
+ */
+export function motorRegions(p) {
+  const g = motorGeom(p), R = [];
+  const th0 = p.theta * Math.PI / 180;
+  const skew = (p.skew || 0) * Math.PI / 180;
+  const poleArc = { count: p.poles, fraction: p.arc, phase: th0, skew };
+  const full = null;
+
+  R.push({ name: "rotorPoles", mu_r: p.murRot, rho: p.rotorRho, group: "rotorTop",
+           r0: g.Rri, r1: g.Rro, z0: g.zTB, z1: g.zTT, arc: poleArc });
+  R.push({ name: "rotorYoke", mu_r: p.murRot, rho: p.rotorRho, group: "rotorTop",
+           r0: g.Rri, r1: g.Rro, z0: g.zTT, z1: g.zYT, arc: full });
+
+  if (g.dual) {
+    R.push({ name: "rotorPolesLower", mu_r: p.murRot, rho: p.rotorRho, group: "rotorBottom",
+             r0: g.Rri, r1: g.Rro, z0: g.zMT, z1: g.zMB, arc: poleArc });
+    R.push({ name: "rotorYokeLower", mu_r: p.murRot, rho: p.rotorRho, group: "rotorBottom",
+             r0: g.Rri, r1: g.Rro, z0: g.zMY, z1: g.zMT, arc: full });
+  } else if (g.back) {
+    R.push({ name: "backPlate", mu_r: p.murBack, rho: p.backRho, group: "stator",
+             r0: g.Rri, r1: g.Rro, z0: g.zBB, z1: g.zBT, arc: full });
+  }
+  return R;
+}
+
+/* Exact volume of a region, cubic millimetres. Independent of the mesh, so comparing it with the
+ * volume the rasterizer actually laid down is a direct check on the rasterizer. */
+export function regionVolume(r) {
+  const annulus = Math.PI * (r.r1 * r.r1 - r.r0 * r.r0);
+  const frac = r.arc ? Math.min(1, r.arc.fraction) : 1;   // skew moves an arc, it does not resize it
+  return annulus * frac * (r.z1 - r.z0);
 }
 
 /* A cylindrical (r, theta, z) mesh.
@@ -153,7 +256,13 @@ function axialGrading(p, g, zmin, zmax, hFar, growth) {
     { from: -g.pcbHalf, to: g.pcbHalf, h: p.pcbT / m.cellsAcrossPcb }
   ];
   const zHard = [-g.pcbHalf, g.pcbHalf, g.zTB, g.zTT, g.zYT];
-  if (p.back) {
+  if (g.dual) {
+    // The lower gap and rotor are the mirror image, and get the same resolution.
+    zCons.push({ from: g.zMB, to: -g.pcbHalf, h: p.gap / m.cellsAcrossAirGap },
+               { from: g.zMT, to: g.zMB, h: p.tooth / m.cellsAcrossPoleHeight },
+               { from: g.zMY, to: g.zMT, h: p.yoke / m.cellsAcrossYoke });
+    zHard.push(g.zMB, g.zMT, g.zMY);
+  } else if (g.back) {
     zCons.push({ from: g.zBB, to: g.zBT, h: p.backT / m.cellsAcrossBackPlate });
     if (p.backGap > 0) zCons.push({ from: g.zBT, to: -g.pcbHalf, h: p.backGap / m.cellsAcrossBackGap });
     zHard.push(g.zBT, g.zBB);
@@ -195,22 +304,34 @@ function gradedMotorMesh(p) {
 
 /* ---- rasterization ------------------------------------------------------------------------- */
 
-/* Per-cell relative permeability.
+/* Per-cell relative permeability, built from the region list.
  *
- * Each cell gets the fraction of its volume occupied by each material, from exact overlap in z and
- * supersampling in plane, then a series blend: 1/mu = (1-f) + f/mu_r. Arithmetic averaging of mu
+ * Each cell accumulates the volume fraction it holds of every region, then a series blend
+ *
+ *     1/mu = (1 - sum_m f_m) + sum_m f_m / mu_m
+ *
+ * which is the reluctance of the parts in series along the flux path. Arithmetic averaging of mu
  * would make a partly filled cell behave as solid iron and silently shrink the air gap.
  *
- * With a graded mesh the z interfaces land exactly on faces, so the z fractions are 0 or 1 and the
- * only partial filling left is the in-plane staircase at the pole edges and the bore.
+ * Regions in this machine never overlap in z, so the accumulation needs no scratch arrays: the
+ * rasterizers walk z-slabs and only the few regions that intersect the current slab are live.
  */
 export function rasterizeMaterials(mesh, p) {
-  return mesh.kind === CYLINDRICAL ? rasterizeCylindrical(mesh, p) : rasterizeCartesian(mesh, p);
+  const regions = motorRegions(p);
+  /* The volume each region ends up occupying is accumulated as it goes. It costs one multiply per
+   * filled cell and gives the mass calculation — and anyone auditing the rasterizer — a direct
+   * comparison against the exact volume of the same region. */
+  const volumes = new Float64Array(regions.length);
+  const mu = mesh.kind === CYLINDRICAL
+    ? rasterizeCylindrical(mesh, p, regions, volumes)
+    : rasterizeCartesian(mesh, p, regions, volumes);
+  return { mu, volumes: Array.from(volumes) };
 }
 
-/* Total overlap of the angular interval [t0, t1] with the union of the pole arcs. */
-function arcOverlap(t0, t1, th0, poles, halfArc) {
-  const pitch = 2 * Math.PI / poles;
+/* Total overlap of the angular interval [t0, t1] with the union of `count` arcs of half-width
+ * `halfArc` centred at th0 + k * pitch. */
+function arcOverlap(t0, t1, th0, count, halfArc) {
+  const pitch = 2 * Math.PI / count;
   const kmin = Math.floor((t0 - th0 - halfArc) / pitch) - 1;
   const kmax = Math.ceil((t1 - th0 + halfArc) / pitch) + 1;
   let total = 0;
@@ -221,95 +342,152 @@ function arcOverlap(t0, t1, th0, poles, halfArc) {
   return total;
 }
 
+/* Arc centre offset at radius r for a skewed pole: a linear ramp of `skew` radians end to end
+ * across the region's radial span, measured about the mid-radius so skew does not rotate the
+ * machine as a whole. */
+function skewPhase(arc, r0, r1, r) {
+  if (!arc.skew) return arc.phase;
+  const mid = 0.5 * (r0 + r1), span = Math.max(1e-9, r1 - r0);
+  return arc.phase + arc.skew * (r - mid) / span;
+}
+
 /* Cylindrical rasterization is *exact*.
  *
- * Every part of this machine is a product of intervals in (r, theta, z): an annular sector
- * extruded in z. A cell is the same shape. So the occupied volume fraction is the product of three
- * one-dimensional overlaps, each computable in closed form — the radial one area-weighted, because
- * the volume element is r dr dtheta dz.
+ * Every region is a product of intervals in (r, theta, z): an annular sector extruded in z. A cell
+ * is the same shape. So the occupied volume fraction is the product of three one-dimensional
+ * overlaps, each computable in closed form — the radial one area-weighted, because the volume
+ * element is r dr dtheta dz.
+ *
+ * Skew is the one thing that couples two of the axes: the arc centre moves with radius, so the
+ * angular fraction becomes a table over (r, theta) rather than over theta alone. It is still exact
+ * per cell, at the cost of an nr x ntheta table instead of an ntheta one.
  *
  * That removes the staircase entirely. The Cartesian rasterizer has to supersample 4x4 in plane and
  * still leaves the bore, the rim and the pole edges as a jagged approximation whose error depends
  * on where the cell boundaries happen to fall.
  */
-function rasterizeCylindrical(mesh, p) {
+function rasterizeCylindrical(mesh, p, regions, volumes) {
   const { nx: nr, ny: nt, nz, xe: re, ye: the, ze } = mesh;
-  const g = motorGeom(p);
-  const { zTB, zTT, zYT, zBT, zBB, Rri, Rro } = g;
   const mu = new Float32Array(mesh.N).fill(1);
-  const th0 = p.theta * Math.PI / 180, halfArc = p.arc * Math.PI / p.poles;
 
-  // Radial area fraction of each cell that lies inside the annulus Rri..Rro. Exact and independent
-  // of theta and z, so it is computed once per radial index.
-  const fRad = new Float64Array(nr);
-  for (let i = 0; i < nr; i++) {
-    const a = Math.max(re[i], Rri), b = Math.min(re[i + 1], Rro);
-    fRad[i] = b > a ? (b * b - a * a) / (re[i + 1] * re[i + 1] - re[i] * re[i]) : 0;
-  }
-  // Angular fraction covered by a pole, likewise independent of r and z.
-  const fArc = new Float64Array(nt);
-  for (let j = 0; j < nt; j++) fArc[j] = arcOverlap(the[j], the[j + 1], th0, p.poles, halfArc) / (the[j + 1] - the[j]);
+  // Per-region radial and angular fraction tables. Both are independent of z.
+  const tab = regions.map((reg, index) => {
+    const fRad = new Float64Array(nr);
+    for (let i = 0; i < nr; i++) {
+      const a = Math.max(re[i], reg.r0), b = Math.min(re[i + 1], reg.r1);
+      fRad[i] = b > a ? (b * b - a * a) / (re[i + 1] * re[i + 1] - re[i] * re[i]) : 0;
+    }
+    let fArc = null, fArcRT = null;
+    if (reg.arc) {
+      const halfArc = reg.arc.fraction * Math.PI / reg.arc.count;
+      if (reg.arc.skew) {
+        fArcRT = new Float64Array(nr * nt);
+        for (let i = 0; i < nr; i++) {
+          const th0 = skewPhase(reg.arc, reg.r0, reg.r1, mesh.xc[i]);
+          for (let j = 0; j < nt; j++)
+            fArcRT[i * nt + j] = arcOverlap(the[j], the[j + 1], th0, reg.arc.count, halfArc) / (the[j + 1] - the[j]);
+        }
+      } else {
+        fArc = new Float64Array(nt);
+        for (let j = 0; j < nt; j++)
+          fArc[j] = arcOverlap(the[j], the[j + 1], reg.arc.phase, reg.arc.count, halfArc) / (the[j + 1] - the[j]);
+      }
+    }
+    return { reg, index, fRad, fArc, fArcRT, inv: 1 / reg.mu_r };
+  });
 
   for (let iz = 0; iz < nz; iz++) {
     const za = ze[iz], zb = ze[iz + 1], dz = zb - za;
-    const fPole = overlap(za, zb, zTB, zTT) / dz;
-    const fYoke = overlap(za, zb, zTT, zYT) / dz;
-    const fBack = p.back ? overlap(za, zb, zBB, zBT) / dz : 0;
-    if (!fPole && !fYoke && !fBack) continue;
+    const live = [];
+    for (const t of tab) {
+      const fz = overlap(za, zb, t.reg.z0, t.reg.z1) / dz;
+      if (fz > 0) live.push({ ...t, fz });
+    }
+    if (!live.length) continue;
     for (let j = 0; j < nt; j++) {
-      const rotorZ = fPole * fArc[j] + fYoke;
       const base = (iz * nt + j) * nr;
+      const dthdz = mesh.dy[j] * dz;
       for (let i = 0; i < nr; i++) {
-        const fr = fRad[i];
-        if (fr <= 0) continue;
-        const fRot = fr * rotorZ, fBk = fr * fBack;
-        if (fRot + fBk > 0) mu[base + i] = 1 / ((1 - fRot - fBk) + fRot / p.murRot + fBk / p.murBack);
+        let f = 0, inv = 0;
+        const cellV = mesh.rArea[i] * dthdz;
+        for (const t of live) {
+          const fr = t.fRad[i];
+          if (fr <= 0) continue;
+          const fa = t.fArcRT ? t.fArcRT[i * nt + j] : t.fArc ? t.fArc[j] : 1;
+          if (fa <= 0) continue;
+          const ff = t.fz * fr * fa;
+          f += ff; inv += ff * t.inv;
+          volumes[t.index] += ff * cellV;
+        }
+        if (f > 0) mu[base + i] = 1 / ((1 - f) + inv);
       }
     }
   }
   return mu;
 }
 
-/* Per-cell relative permeability on a Cartesian mesh.
- *
- * Exact overlap in z, supersampling in plane. A partially filled cell gets a series blend,
- * 1/mu = (1-f) + f/mu_r. Arithmetic averaging of mu would make a partly filled cell behave as solid
- * iron and silently shrink the air gap.
+/* Per-cell relative permeability on a Cartesian mesh: exact overlap in z, supersampled in plane.
  *
  * With a graded mesh the z interfaces land exactly on faces, so the z fractions are 0 or 1 and the
  * only partial filling left is the in-plane staircase at the pole edges and the bore.
  */
-function rasterizeCartesian(mesh, p) {
+function rasterizeCartesian(mesh, p, regions, volumes) {
   const { nx, ny, nz, xc, yc, ze } = mesh;
-  const g = motorGeom(p);
-  const { zTB, zTT, zYT, zBT, zBB, Rri, Rro } = g;
   const mu = new Float32Array(mesh.N).fill(1);
-  const m = 2 * Math.PI / p.poles, halfArc = p.arc * m / 2, th0 = p.theta * Math.PI / 180;
-  const S = RASTER_SUPERSAMPLE;
+  const S = RASTER_SUPERSAMPLE, S2 = S * S;
+
+  // Radial extent that any region reaches, so a cell far from the machine can be skipped at once.
+  let rLo = Infinity, rHi = 0;
+  for (const r of regions) { rLo = Math.min(rLo, r.r0); rHi = Math.max(rHi, r.r1); }
+  if (!regions.length) return mu;
 
   for (let iz = 0; iz < nz; iz++) {
     const za = ze[iz], zb = ze[iz + 1], dz = zb - za;
-    const ft = overlap(za, zb, zTB, zTT) / dz;
-    const fy = overlap(za, zb, zTT, zYT) / dz;
-    const fb = p.back ? overlap(za, zb, zBB, zBT) / dz : 0;
-    if (!ft && !fy && !fb) continue;
+    const live = [];
+    for (let n = 0; n < regions.length; n++) {
+      const reg = regions[n];
+      const fz = overlap(za, zb, reg.z0, reg.z1) / dz;
+      if (fz > 0) live.push({ reg, fz, index: n, inv: 1 / reg.mu_r,
+                              pitch: reg.arc ? 2 * Math.PI / reg.arc.count : 0,
+                              halfArc: reg.arc ? reg.arc.fraction * Math.PI / reg.arc.count : 0 });
+    }
+    if (!live.length) continue;
+    const hit = new Float64Array(live.length);
+
     for (let iy = 0; iy < ny; iy++) {
-      const ya = mesh.ye[iy], dy = mesh.dy[iy];
-      const cy = yc[iy];
+      const ya = mesh.ye[iy], dy = mesh.dy[iy], cy = yc[iy];
       for (let ix = 0; ix < nx; ix++) {
         const cx = xc[ix], dx = mesh.dx[ix];
         const rc = Math.hypot(cx, cy), rCell = 0.5 * Math.hypot(dx, dy);
-        if (rc > Rro + rCell || rc < Rri - rCell) continue;
+        if (rc > rHi + rCell || rc < rLo - rCell) continue;
         const xa = mesh.xe[ix];
-        let nA = 0, nT = 0;
+        hit.fill(0);
         for (let a = 0; a < S; a++) for (let b = 0; b < S; b++) {
-          const sx = xa + (a + .5) / S * dx, sy = ya + (b + .5) / S * dy, r = Math.hypot(sx, sy);
-          if (r < Rri || r > Rro) continue;
-          nA++;
-          if (ft) { let d = Math.atan2(sy, sx) - th0; d = ((d % m) + m + m / 2) % m - m / 2; if (Math.abs(d) < halfArc) nT++; }
+          const sx = xa + (a + .5) / S * dx, sy = ya + (b + .5) / S * dy;
+          const r = Math.hypot(sx, sy);
+          if (r < rLo || r > rHi) continue;
+          const th = Math.atan2(sy, sx);
+          for (let n = 0; n < live.length; n++) {
+            const L = live[n];
+            if (r < L.reg.r0 || r > L.reg.r1) continue;
+            if (L.reg.arc) {
+              const m = L.pitch;
+              let d = th - skewPhase(L.reg.arc, L.reg.r0, L.reg.r1, r);
+              d = ((d % m) + m + m / 2) % m - m / 2;
+              if (Math.abs(d) >= L.halfArc) continue;
+            }
+            hit[n]++;
+          }
         }
-        const fr = ft * nT / (S * S) + fy * nA / (S * S), fbk = fb * nA / (S * S);
-        if (fr + fbk > 0) mu[(iz * ny + iy) * nx + ix] = 1 / ((1 - fr - fbk) + fr / p.murRot + fbk / p.murBack);
+        let f = 0, inv = 0;
+        const cellV = dx * dy * dz;
+        for (let n = 0; n < live.length; n++) {
+          if (!hit[n]) continue;
+          const ff = live[n].fz * hit[n] / S2;
+          f += ff; inv += ff * live[n].inv;
+          volumes[live[n].index] += ff * cellV;
+        }
+        if (f > 0) mu[(iz * ny + iy) * nx + ix] = 1 / ((1 - f) + inv);
       }
     }
   }
@@ -319,15 +497,16 @@ function rasterizeCartesian(mesh, p) {
 export function buildMotor(p) {
   const mesh = buildMesh(p);
   const g = motorGeom(p);
-  const mu = rasterizeMaterials(mesh, p);
+  const { mu, volumes } = rasterizeMaterials(mesh, p);
   const zLay = layerZ(p);
   const polys = coilPolys(p);
   const segs = segsFromPolys(polys, zLay);
   // The trace field depends only on the winding and the mesh, never on rotor angle or current.
   const segKey = JSON.stringify([mesh.kind, mesh.nx, mesh.ny, mesh.nz, mesh.x0, mesh.x1, mesh.y0, mesh.y1,
                                  mesh.z0, mesh.hMin, mesh.hMax, mesh.sectors,
-                                 p.poles, p.ri, p.ro, p.turns, p.layers, p.pitch, p.edge]);
-  return { kind: "motor", p, mesh, mu, polys, segs, segKey, zLay, g };
+                                 p.poles, p.ri, p.ro, p.turns, p.layers, p.pitch, p.edge,
+                                 p.coilCount, p.phasePattern, p.coilSense]);
+  return { kind: "motor", p, mesh, mu, volumes, polys, segs, segKey, zLay, g };
 }
 
 /* Resolution actually achieved, for the quality flags and AFS.plan(). */
@@ -339,13 +518,17 @@ export function meshResolution(mesh, p) {
     poleHeight: cellsAcross(mesh.ze, mesh.nz, g.zTB, g.zTT),
     yoke: cellsAcross(mesh.ze, mesh.nz, g.zTT, g.zYT),
     pcb: cellsAcross(mesh.ze, mesh.nz, -g.pcbHalf, g.pcbHalf),
-    backPlate: p.back ? cellsAcross(mesh.ze, mesh.nz, g.zBB, g.zBT) : 0,
+    backPlate: g.back ? cellsAcross(mesh.ze, mesh.nz, g.zBB, g.zBT) : 0,
     // The radial axis runs 0..Rmax in cylindrical and -L..L in Cartesian, so the diameter is
     // counted twice over in one and directly in the other.
     activeDiameter: cyl ? 2 * cellsAcross(mesh.xe, mesh.nx, 0, g.Rro)
                         : cellsAcross(mesh.xe, mesh.nx, -g.Rro, g.Rro),
     radialSpan: cellsAcross(mesh.xe, mesh.nx, p.ri, p.ro)
   };
+  if (g.dual) {
+    res.lowerAirGap = cellsAcross(mesh.ze, mesh.nz, g.zMB, -g.pcbHalf);
+    res.lowerPoleHeight = cellsAcross(mesh.ze, mesh.nz, g.zMT, g.zMB);
+  }
   if (cyl) {
     // Angular cells spanning one pole arc: the feature the theta mesh exists to resolve.
     const arcSpan = p.arc * 2 * Math.PI / p.poles;

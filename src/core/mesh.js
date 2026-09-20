@@ -129,11 +129,11 @@ function cylindricalFactors(m) {
     { i: rc,        j: dthf,     k: ones(nz) }, // d_th = r_c * dthetaf   (arc length)
     { i: ones(nr),  j: ones(nt), k: dzf }       // d_z  = dzf
   ];
-  m.vol = { i: rArea, j: dth, k: ones(nz) };
+  m.vol = { i: rArea, j: dth, k: dz };          // V = dA_r * dtheta * dz
   // theta factors are radians and carry no length; rArea is an area and carries two.
   m.areaPow = [[1, 0, 1], [1, 0, 1], [2, 0, 0]];
   m.distPow = [[1, 0, 0], [1, 0, 0], [0, 0, 1]];
-  m.volPow = [2, 0, 0];
+  m.volPow = [2, 0, 1];
   m.coordPow = [1, 0, 1];   // r and z are lengths, theta is radians
   m.rArea = rArea;
 }
