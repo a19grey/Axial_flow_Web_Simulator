@@ -18,7 +18,8 @@
     "solve": "node cli/run.js solve",
     "plan": "node cli/run.js plan",
     "capabilities": "node cli/run.js capabilities",
-    "test:metrics": "node tests/run-tests.js --only metrics"
+    "test:metrics": "node tests/run-tests.js --only metrics",
+    "test:geometry": "node tests/run-tests.js --only geometry"
   },
   "devDependencies": {
     "playwright": "^1.49.0"

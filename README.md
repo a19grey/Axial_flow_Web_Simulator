@@ -51,9 +51,10 @@ angle and the form set to it.
     npm run test:ui
     npm run test:convergence
     npm run test:metrics
+    npm run test:geometry
 
-Three suites need a real GPU and are local-only. CI runs `analytic`, the closed-form half of
-`metrics` (`node tests/metrics.js --cpu-only`, which needs no GPU at all), and `ui` on SwiftShader's
+Three suites need a real GPU and are local-only. CI runs `analytic`, `geometry` and the closed-form
+half of `metrics` (both need no GPU at all), and `ui` on SwiftShader's
 software adapter, where the UI suite shrinks every mesh and visibly skips the assertions that depend
 on resolution. See `docs/numerics.md` for what runs where and why.
 
@@ -397,6 +398,7 @@ antisymmetric between 45° and 135°, and the two stress surfaces agree.
 | `reference` | *(needs a GPU)* every design matches the frozen pre-split single-file build to 1e-9 relative |
 | `ui` | the real page: the solve it runs by itself on load, both validation buttons, project round-trip, v1 migration, model export, graded meshing, the current-angle sweep and its confirming solve at the fitted peak, view controls, and no console errors |
 | `convergence` | *(needs a GPU)* the answer stops moving under refinement; grading beats uniform per cell; a periodic sector reproduces the full turn exactly; cylindrical and Cartesian agree on a converged answer; the 370 mm case runs; a 14 M-cell solve returns a real answer rather than zeros |
+| `geometry` | *(no GPU)* the expression language: arithmetic and precedence against hand-computed values, a closed grammar that refuses assignment, member access and host objects, error messages that name the nearest identifier in scope and spell out a dependency cycle, scopes that resolve in any declaration order |
 | `metrics` | *(GPU for half of it)* loop self-inductance against its closed form; cylindrical cell volumes tiling an annulus exactly; rasterized region volumes against exact ones; the winding period derived rather than assumed; the sin 2γ fit recovering a peak the sweep grid does not contain; Maxwell stress against virtual work; reciprocity of the inductance matrix and its convergence; stored energy two ways; the two rotors of a dual-sided machine; skew trading ripple for torque |
 
 `tests/reference/axial-flux-3d-webgpu.html` is the original single-file build, kept so the

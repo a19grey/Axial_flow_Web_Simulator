@@ -9,6 +9,7 @@
  *   ui          the full page: solve, validation buttons, project round-trip, export, view controls
  *   convergence mesh refinement, the graded/cylindrical cross-check, the 370 mm scale case
  *   metrics     closed forms, symmetries, and torque by two independent methods
+ *   geometry    the geometry language: expressions, profiles, traced coils (no GPU)
  *
  * Exits non-zero if any suite fails, so CI can gate on it.
  */
@@ -24,7 +25,8 @@ const SUITES = [
   { name: "reference", cmd: ["tests/compare-reference.js"], note: "vs the frozen pre-split build" },
   { name: "ui", cmd: ["tests/smoke-ui.js"], note: "the full page end to end" },
   { name: "convergence", cmd: ["tests/convergence.js", "--out", "tests/out/convergence.json"], note: "mesh refinement and the 370 mm scale case" },
-  { name: "metrics", cmd: ["tests/metrics.js", "--out", "tests/out/metrics.json"], note: "derived metrics and the cross-checks between them" }
+  { name: "metrics", cmd: ["tests/metrics.js", "--out", "tests/out/metrics.json"], note: "derived metrics and the cross-checks between them" },
+  { name: "geometry", cmd: ["tests/geometry.js", "--out", "tests/out/geometry.json"], note: "the geometry language, CPU only" }
 ];
 
 function run(script, extra) {
