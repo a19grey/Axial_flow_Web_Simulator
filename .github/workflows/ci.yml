@@ -29,6 +29,12 @@ jobs:
       # Grid 80 rather than the default 128: it clears both tolerances with margin (loop 0.26%
       # against 1%, sphere 7.7% against 9%) and is four times less work. At 128 this step ran for
       # over five minutes on a runner's software adapter. See docs/numerics.md.
+      # The geometry language: no GPU, no browser, a tenth of a second. It runs before everything
+      # else because a broken expression evaluator would fail the later suites in confusing ways.
+      - name: Geometry language
+        timeout-minutes: 2
+        run: node tests/geometry.js
+
       # Closed forms, exact volume identities and the winding-period derivation. None of it needs a
       # GPU, so the runner gets the same answer a workstation does, in milliseconds.
       - name: Closed-form metric checks
