@@ -142,6 +142,34 @@ function cpuChecks() {
   }
   report.cases.rasterization = rasterRows;
 
+  /* The same audit for a profiled machine: a comma-shaped pole whose width and centre line both
+   * move with radius. This is the case where the closed-form area earns its keep — an arc of
+   * constant width is hard to rasterize wrongly, a free-form footprint is not. Cylindrical stays
+   * near-exact because the wedge is still bounded by two angles at every radius and the radial
+   * variation inside a cell is integrated rather than sampled; the Cartesian modes carry their
+   * usual in-plane staircase. */
+  const COMMA = [
+    { atRadius: 0, widthFraction: 0.26, offset_deg: 18 },
+    { atRadius: 0.35, widthFraction: 0.5, offset_deg: 11 },
+    { atRadius: 0.7, widthFraction: 0.72, offset_deg: 3 },
+    { atRadius: 1, widthFraction: 0.8, offset_deg: -4 }
+  ];
+  const profiledRows = [];
+  for (const mode of ["cylindrical", "graded", "uniform"]) {
+    const { spec } = normalizeSpec({ design: { rotor: { poleShape: COMMA } },
+                                     mesh: { mode, activeCellsAcrossDiameter: 128, cellsAcrossDiameter: 128, cellsAcrossPoleArc: 24 } });
+    const job = buildMotor(specToParams(spec));
+    const regions = motorRegions(job.p);
+    const errs = regions.map((r, i) => (job.volumes[i] * job.mesh.sectors - regionVolume(r)) / regionVolume(r) * 100);
+    const worst = Math.max(...errs.map(Math.abs));
+    profiledRows.push({ mode, worst_pct: worst });
+    process.stderr.write(`     ${mode.padEnd(12)} worst ${worst.toExponential(2)}%  (comma-profiled poles)\n`);
+    ok(`${mode} rasterization matches the exact volumes of a profiled pole`,
+       worst < (mode === "cylindrical" ? TOL.rasterCylindrical_pct : TOL.rasterCartesian_pct),
+       `${worst.toExponential(2)}%`);
+  }
+  report.cases.rasterizationProfiled = profiledRows;
+
   /* The current-angle sweep solves on a 15° grid and then solves once more at the peak of a
    * sin 2γ fit, so the fit has to find a peak the grid does not contain. Sampled from an exact
    * sin 2(γ − φ) on that same grid, it must recover φ + 45° to round-off — a peak that lands

@@ -46,7 +46,22 @@ export function defaultSpec() {
          * coilCount with phasePattern / coilSense arrays describes any other single-layer layout. */
         coilCount: null,
         phasePattern: null,
-        coilSense: null
+        coilSense: null,
+        /* Coil footprint. By default a coil fills its whole angular pitch and its turns nest as
+         * straight-sided trapezoids. coilSpanFraction narrows that wedge, coilSkew_deg swings its
+         * centre line linearly from the inner radius to the outer, and coilShape replaces both
+         * with a free profile:
+         *
+         *   [{ atRadius: 0, widthFraction: 0.72, offset_deg: 9 },
+         *    { atRadius: 1, widthFraction: 0.86, offset_deg: -6 }]
+         *
+         * atRadius is 0 at the inner radius and 1 at the outer; widthFraction is the fraction of
+         * the coil pitch the turn occupies there. A centre line that swings further than the coil
+         * is wide is the YASA-style arrangement a straight radial line crosses two coils in — the
+         * coils still clear each other at every radius, which the tool checks. */
+        coilSpanFraction: 1,
+        coilSkew_deg: 0,
+        coilShape: null
       },
       rotor: {
         airGap_mm: 3, mu_r: 20,
@@ -57,7 +72,11 @@ export function defaultSpec() {
         /* Linear skew of the pole arc with radius, in mechanical degrees from the inner radius to
          * the outer. Skew trades peak torque for ripple. */
         poleSkew_deg: 0,
-        density_kg_m3: MATERIALS.ironDensity_kg_m3,
+        /* Pole footprint, in the same form as the stator's coilShape: a table of width fraction
+         * and centre offset against normalized radius. Set, it replaces poleArcFraction and
+         * poleSkew_deg, and lets a 3D-printed rotor carry a pole no arc can draw — a comma, a
+         * teardrop, a hook. Null keeps the straight-sided arc. */
+        poleShape: null,
         coreLoss: { ...CORE_LOSS_DEFAULTS }
       },
       backPlate: { enabled: true, mu_r: 20, thickness_mm: 4, gapBelowPcb_mm: 1,
@@ -132,6 +151,9 @@ export function normalizeSpec(input) {
   ds.coilCount = st.coilCount == null ? null : Math.max(1, Math.round(num(st.coilCount, 1)));
   ds.phasePattern = intArray(st.phasePattern, 0, 2);
   ds.coilSense = signArray(st.coilSense);
+  ds.coilSpanFraction = Math.min(1, Math.max(0.05, num(st.coilSpanFraction, ds.coilSpanFraction)));
+  ds.coilSkew_deg = num(st.coilSkew_deg, ds.coilSkew_deg);
+  ds.coilShape = shapeProfile(st.coilShape, "design.stator.coilShape", warnings);
 
   const rt = src.design?.rotor ?? {}, dr = s.design.rotor;
   dr.airGap_mm = clampMin(rt.airGap_mm, 0.3, dr.airGap_mm);
@@ -141,6 +163,7 @@ export function normalizeSpec(input) {
   dr.poleArcFraction = Math.min(0.95, Math.max(0.1, num(rt.poleArcFraction, dr.poleArcFraction)));
   dr.dualSided = rt.dualSided === undefined ? dr.dualSided : !!rt.dualSided;
   dr.poleSkew_deg = num(rt.poleSkew_deg, dr.poleSkew_deg);
+  dr.poleShape = shapeProfile(rt.poleShape, "design.rotor.poleShape", warnings);
   dr.density_kg_m3 = clampMin(rt.density_kg_m3, 0, dr.density_kg_m3);
   const cl = rt.coreLoss ?? {};
   dr.coreLoss.specificLoss_W_per_kg = clampMin(cl.specificLoss_W_per_kg, 0, dr.coreLoss.specificLoss_W_per_kg);
@@ -190,6 +213,31 @@ export function normalizeSpec(input) {
   const errs = validateSpec(s);
   if (errs.length) throw new Error(errs.join(" "));
   return { spec: s, warnings };
+}
+
+/* An optional shape profile: rows of {atRadius, widthFraction, offset_deg} describing how a wedge
+ * widens and swings with radius. Anything unusable becomes null, which every consumer reads as
+ * "no profile", so a malformed shape falls back to the plain arc rather than failing a solve.
+ *
+ * A profile with one row is a constant-width arc and is accepted; a row wider than the pitch is
+ * not, because neighbouring wedges would then intersect — two coils shorted together, or a rotor
+ * with no gap between poles. That is a design error worth a message rather than a mesh. */
+function shapeProfile(v, path, warnings) {
+  const rows = Array.isArray(v) ? v : Array.isArray(v?.profile) ? v.profile : null;
+  if (v == null) return null;
+  if (!rows || !rows.length) { warnings.push(`${path}: not a list of profile points; ignored.`); return null; }
+  const out = [];
+  for (const r of rows) {
+    const u = +(r?.atRadius), w = +(r?.widthFraction), o = +(r?.offset_deg ?? 0);
+    if (![u, w, o].every(Number.isFinite)) { warnings.push(`${path}: a point is missing atRadius or widthFraction; ignored.`); continue; }
+    if (w > 1) warnings.push(`${path}: a point is ${w} of the pitch wide, which would run neighbouring wedges into each other; narrowed to 1.`);
+    out.push({ atRadius: Math.min(1, Math.max(0, u)),
+               widthFraction: Math.min(1, Math.max(0.01, w)),
+               offset_deg: Math.min(180, Math.max(-180, o)) });
+  }
+  if (!out.length) { warnings.push(`${path}: no usable profile points; ignored.`); return null; }
+  out.sort((a, b) => a.atRadius - b.atRadius);
+  return out;
 }
 
 /* An optional array of small integers, clamped to a range. Anything unusable becomes null, which
@@ -256,6 +304,9 @@ export function specToParams(spec) {
     arcSegments: PCB.arcSegments,
     copperT: st.copperThickness_um * 1e-3, boardRho: st.boardDensity_kg_m3,
     coilCount: st.coilCount, phasePattern: st.phasePattern, coilSense: st.coilSense,
+    coilSpan: st.coilSpanFraction, coilSkew: st.coilSkew_deg, coilShape: st.coilShape,
+    coilSideSegments: PCB.coilSideSegments,
+    poleShape: rt.poleShape,
     gap: rt.airGap_mm, murRot: rt.mu_r, tooth: rt.poleHeight_mm, yoke: rt.yokeThickness_mm, arc: rt.poleArcFraction,
     dual: rt.dualSided, skew: rt.poleSkew_deg, rotorRho: rt.density_kg_m3, coreLoss: rt.coreLoss,
     back: bp.enabled, murBack: bp.mu_r, backT: bp.thickness_mm, backGap: bp.gapBelowPcb_mm, backRho: bp.density_kg_m3,

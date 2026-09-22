@@ -1,6 +1,6 @@
 # Generalizing the geometry engine
 
-*Status: plan, not yet built. Written 2026-09-20.*
+*Written 2026-09-20. Status: in progress — see "Landed so far".*
 
 ## Why
 
@@ -248,6 +248,37 @@ directly, which is enough for the shapes this language can express.
 
 ---
 
+## Landed so far
+
+Two pieces are in, ahead of the IR they will eventually be expressed in. Both were taken early because
+they are what the demo machines actually need, and both were built so the IR can absorb them rather than
+replace them.
+
+**`src/core/expr.js` (G0).** The safe expression evaluator: tokenizer, recursive-descent parser, scope
+resolution with cycle detection, and error messages aimed at whoever wrote the expression. Tested by
+`tests/geometry.js`.
+
+**`src/core/shapes.js` — shape profiles (part of G1's value, on the existing region path).** Any repeated
+wedge — rotor pole, coil — carries a table of width fraction and centre offset against normalized radius
+instead of a single width and skew. This is not the general traced profile G1 specifies: it is still one
+wedge per pitch, still bounded by two angles at every radius. That restriction is exactly what keeps the
+three properties above:
+
+- rasterization on a cylindrical mesh stays **exact**, now by cutting each cell at the profile's knots and
+  at every radius where an edge crosses the cell, where the integrand is quadratic and Simpson is exact;
+- the hard points are unchanged, because a profile moves nothing in z;
+- the swept area is closed-form, so `regionVolume()` still audits the rasterizer — and does more work than
+  before, since a free footprint is much easier to rasterize wrongly than an arc.
+
+`src/cases/yasa-shapes-demo.json` is the worked example: coils whose centre line swings more than a coil
+pitch across the radius, and comma-shaped rotor poles. Unprofiled designs are bit-for-bit unchanged, which
+`tests/geometry.js` asserts against a copy of the old coil builder and `tests/compare-reference.js`
+asserts against the frozen pre-split build.
+
+What this does **not** do, and G1/G2 still must: arbitrary traced outlines, fillets and splines, booleans,
+z-stations and twists, more than one wedge shape per machine, and coil turns as true inward offsets of a
+traced curve rather than angular insets of a wedge.
+
 ## Phases
 
 Each phase ends green — all five suites pass, presets reproduce — so the tool is never half-converted.
@@ -267,6 +298,9 @@ Each phase ends green — all five suites pass, presets reproduce — so the too
 bit-for-bit; per-solid rasterization error unchanged.
 
 ### G1 — Profiles, paths, solids
+
+*Partly landed: see "Landed so far" for the radial shape profiles, which cover the pole and coil footprints
+this section's examples needed. The traced-path work below is untouched.*
 
 Path segments, fillets, splines, mirror/offset/repeat, `subtract`, z-stations. Triangulator (ear clipping
 with hole bridging) so render and STL/OBJ follow arbitrary shapes — `meshes.js::rotorSolid` becomes one

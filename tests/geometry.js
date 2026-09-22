@@ -14,6 +14,9 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { evalExpr, resolveScope, dependencies, parseExpr, field, ExprError } from "../src/core/expr.js";
+import { resolveShape, shapeAt, shapeOutline, shapeAreaFraction, shapeClearance, shapeSwing, DEG } from "../src/core/shapes.js";
+import { coilPolys, windingLayout } from "../src/core/geometry.js";
+import { normalizeSpec } from "../src/core/spec.js";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const problems = [];
@@ -178,6 +181,134 @@ function reuse() {
   report.cases.evaluationsPerSecond = Math.round(20000 / (ms / 1000));
 }
 
+/* ---- shape profiles --------------------------------------------------------------------------- */
+
+/* The coil builder as it stood before profiles existed. A profiled shape has to be a superset of
+ * it, not a replacement for it: every design saved before this feature landed must still produce
+ * exactly the same current paths, down to the bit, or the field it solves has quietly moved. */
+function legacyCoilPolys(p) {
+  const { count: Nc, phase, sense } = windingLayout(p);
+  const half = Math.PI / Nc, pitch = p.pitch, edge = p.edge, nArc = p.arcSegments ?? 10;
+  const polys = [];
+  for (let k = 0; k < Nc; k++) {
+    const th = k * 2 * Math.PI / Nc, ph = phase[k];
+    for (let j = 0; j < p.turns; j++) {
+      const d = edge + j * pitch, ri = p.ri + d, ro = p.ro - d;
+      const ai = half - d / ri, ao = half - d / ro;
+      if (ro - ri < 1 || ai < 0.02) break;
+      const pts = [[ri * Math.cos(th - ai), ri * Math.sin(th - ai)]];
+      for (let s = 0; s <= nArc; s++) { const a = th - ao + 2 * ao * s / nArc; pts.push([ro * Math.cos(a), ro * Math.sin(a)]); }
+      for (let s = 0; s <= nArc; s++) { const a = th + ai - 2 * ai * s / nArc; pts.push([ri * Math.cos(a), ri * Math.sin(a)]); }
+      polys.push({ pts: sense[k] < 0 ? pts.slice().reverse() : pts, ph, coil: k, sense: sense[k] });
+    }
+  }
+  return polys;
+}
+
+const COMMA = [
+  { atRadius: 0, widthFraction: 0.26, offset_deg: 18 },
+  { atRadius: 0.35, widthFraction: 0.5, offset_deg: 11 },
+  { atRadius: 0.7, widthFraction: 0.72, offset_deg: 3 },
+  { atRadius: 1, widthFraction: 0.8, offset_deg: -4 }
+];
+
+function shapes() {
+  process.stderr.write("\n6. shape profiles\n");
+
+  // Reading the table: interpolated between rows, held flat outside it.
+  const sh = resolveShape({ count: 8, profile: COMMA });
+  const pitch = 2 * Math.PI / 8;
+  ok("a profile reads its rows back", near(shapeAt(sh, 0).half, 0.5 * 0.26 * pitch) && near(shapeAt(sh, 1).off, -4 * DEG));
+  ok("and interpolates linearly between them",
+     near(shapeAt(sh, 0.175).half, 0.5 * 0.5 * (0.26 + 0.5) * pitch, 1e-9));
+  ok("and holds the end values outside the table",
+     shapeAt(sh, -2).half === shapeAt(sh, 0).half && shapeAt(sh, 7).off === shapeAt(sh, 1).off);
+
+  /* The swept area is what the rasterizer is audited against, so it is worth checking against a
+   * method that shares nothing with it: brute-force quadrature over 200k radial strips. */
+  const r0 = 19, r1 = 51;
+  const closed = shapeAreaFraction(sh, r0, r1);
+  let num = 0;
+  const n = 200000;
+  for (let i = 0; i < n; i++) {
+    const r = r0 + (r1 - r0) * (i + 0.5) / n;
+    num += 2 * shapeAt(sh, (r - r0) / (r1 - r0)).half * r * (r1 - r0) / n;
+  }
+  const bruteFrac = 8 * num / (Math.PI * (r1 * r1 - r0 * r0));
+  ok("the closed-form swept area matches brute-force quadrature",
+     Math.abs(closed - bruteFrac) / bruteFrac < 1e-8, `${closed.toFixed(9)} vs ${bruteFrac.toFixed(9)}`);
+
+  // A plain arc is the profile a fraction and a skew describe, so its area is the old formula.
+  const plain = resolveShape({ count: 8, fraction: 0.5 });
+  ok("a constant-width wedge covers exactly its width fraction", shapeAreaFraction(plain, r0, r1) === 0.5);
+  const skewed = resolveShape({ count: 8, fraction: 0.5, skew: 12 * DEG });
+  ok("and a skew moves it without resizing it", shapeAreaFraction(skewed, r0, r1) === 0.5);
+
+  /* Clearance is the distinction the YASA-style winding turns on. Neighbouring coils must not
+   * touch at any radius, and that is a question about width alone; a centre line that swings
+   * further than the coil is wide is the intended overlap along a radius, not a fault. */
+  const coil = resolveShape({ count: 12, profile: [
+    { atRadius: 0, widthFraction: 0.62, offset_deg: 11 },
+    { atRadius: 0.5, widthFraction: 0.78, offset_deg: 3 },
+    { atRadius: 1, widthFraction: 0.88, offset_deg: -7 }] });
+  const clr = shapeClearance(coil);
+  ok("the demo coil clears its neighbour at every radius", !clr.overlaps && clr.gap > 0.01,
+     `${(clr.gap / DEG).toFixed(2)}° gap`);
+  /* The claim the demo actually makes: sweeping the whole coil over its radial range covers more
+   * than one coil pitch, so somewhere there is an angle at which a straight radial line leaves one
+   * coil and enters its neighbour. That needs the centre line to swing, but how far is not a fixed
+   * multiple of the width — it is this comparison, against the pitch. */
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i <= 200; i++) {
+    const { half, off } = shapeAt(coil, i / 200);
+    lo = Math.min(lo, off - half); hi = Math.max(hi, off + half);
+  }
+  ok("so a straight radial line crosses two coils", hi > lo + coil.pitch,
+     `${((hi - lo - coil.pitch) / DEG).toFixed(1)}° of radial overlap`);
+  const wide = resolveShape({ count: 12, profile: [{ atRadius: 0, widthFraction: 1.4 }] });
+  ok("a wedge wider than its pitch is reported as overlapping", shapeClearance(wide).overlaps);
+
+  /* Outlines. A straight-sided turn keeps single chords for sides; a profiled one samples them. */
+  const o1 = shapeOutline(plain, { r0: 20, r1: 50, arcSegs: 10 });
+  ok("a straight-sided outline has no intermediate side points", o1.length === 1 + 11 + 11);
+  const o2 = shapeOutline(sh, { r0: 20, r1: 50, arcSegs: 10, sideSegs: 6 });
+  ok("a profiled outline samples both sides", o2.length === 6 + 11 + 5 + 11);
+  ok("an outline the inset has closed up reports itself rather than crossing over",
+     shapeOutline(plain, { r0: 20, r1: 50, inset: 40 }) === null);
+
+  /* The equivalence that protects every design saved before profiles existed. */
+  const designs = [
+    { poles: 4, ri: 15, ro: 40, turns: 10, pitch: 0.4, edge: 0.6, arcSegments: 10 },
+    { poles: 8, ri: 20, ro: 55, turns: 14, pitch: 0.5, edge: 1, arcSegments: 10 },
+    { poles: 6, ri: 15, ro: 40, turns: 40, pitch: 0.4, edge: 0.6, arcSegments: 10 },
+    { poles: 8, ri: 110, ro: 185, turns: 16, pitch: 2, edge: 1, arcSegments: 10,
+      coilCount: 12, phasePattern: [0, 1, 2], coilSense: [1, -1] }
+  ];
+  const same = designs.every(p => JSON.stringify(coilPolys(p)) === JSON.stringify(legacyCoilPolys(p)));
+  ok("unprofiled coils are bit-for-bit what the old builder produced", same, `${designs.length} designs`);
+
+  /* A profile a turn cannot fit inside ends the coil early, which is the honest answer: fewer
+   * turns, not crossed traces. */
+  const tight = coilPolys({ ...designs[0], coilShape: [{ atRadius: 0, widthFraction: 0.3 }, { atRadius: 1, widthFraction: 0.5 }] });
+  const loose = coilPolys(designs[0]);
+  ok("a narrower coil profile fits fewer turns", tight.length < loose.length, `${tight.length} vs ${loose.length} turns`);
+
+  // The spec is the authoring surface, so its cleanup of a hand-written profile is part of this.
+  const { spec, warnings } = normalizeSpec({ design: { rotor: { poleShape: [
+    { atRadius: 1.4, widthFraction: 1.8, offset_deg: 5 },
+    { atRadius: 0.2, widthFraction: 0.4 },
+    { atRadius: "x", widthFraction: 3 }] } } });
+  const rows = spec.design.rotor.poleShape;
+  ok("the spec sorts a profile by radius and clamps it into range",
+     rows.length === 2 && rows[0].atRadius === 0.2 && rows[1].atRadius === 1 && rows[1].widthFraction === 1);
+  ok("and says so rather than silently redrawing the design", warnings.length === 2, warnings.length + " warnings");
+  ok("a profile that is not a list is ignored with a warning",
+     normalizeSpec({ design: { rotor: { poleShape: 7 } } }).spec.design.rotor.poleShape === null);
+
+  report.cases.shapes = { commaAreaFraction: closed, coilClearance_deg: clr.gap / DEG,
+                          coilSwing_deg: shapeSwing(coil) / DEG };
+}
+
 /* ---- main ------------------------------------------------------------------------------------- */
 
 const args = process.argv.slice(2);
@@ -188,6 +319,7 @@ refusals();
 messages();
 scopes();
 reuse();
+shapes();
 
 if (outFile) {
   await mkdir(dirname(resolve(ROOT, outFile)), { recursive: true });

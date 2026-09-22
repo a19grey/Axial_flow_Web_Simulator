@@ -395,6 +395,52 @@ async function main() {
       process.stderr.write("  skip  the current-angle sweep and its peak solve  (software adapter: 14 solves is too slow)\n");
     }
 
+    /* ---- worked examples and shape profiles ------------------------------------------------------
+     * The dropdown loads the same case files the CLI runs, so a broken or renamed one is a broken
+     * page rather than a broken test fixture. Each is fetched and planned, which builds its mesh
+     * without solving it, and then the shape demo is loaded the way the dropdown loads it and
+     * solved: profiled coils and a profiled rotor through the full page path. */
+    const demo = await page.evaluate(async () => {
+      const pj = await import("./src/ui/project.js");
+      const settle = () => new Promise(r => { const t = setInterval(() => { if (!document.getElementById("solve").disabled) { clearInterval(t); r(); } }, 50); });
+      const plans = [];
+      for (const p of pj.PRESETS) {
+        const res = await fetch(`./src/cases/${p.file}`);
+        const raw = res.ok ? await res.json() : null;
+        const r = raw ? await window.AFS.plan(shrinkSpec(raw)) : null;
+        plans.push({ file: p.file, status: res.status, name: raw?.name,
+                     ok: !!r && !r.error && r.fits !== false, error: r?.error ?? null });
+      }
+      const spec = shrinkSpec(await (await fetch("./src/cases/yasa-shapes-demo.json")).json());
+      await pj.applyProject(spec, { solve: false });
+      const note = document.getElementById("shapeNote");
+      const noteText = note.hidden ? null : note.textContent;
+      document.getElementById("solve").click();
+      await settle();
+      const status = document.getElementById("status").textContent;
+
+      /* The field-line control. Both readings come from the same solved field, so the only thing
+       * that can move the count is the control itself. */
+      const lines = async v => {
+        const el = document.getElementById("oLineDensity");
+        el.value = String(v);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        await new Promise(r => setTimeout(r, 700));
+        return +(document.getElementById("lineInfo").textContent.match(/^(\d+) field lines/)?.[1] ?? 0);
+      };
+      const sparse = await lines(0.5), dense = await lines(4);
+      await lines(1);
+      return { plans, noteText, status, sparse, dense };
+    });
+    ok("every worked example fetches and meshes", demo.plans.every(p => p.status === 200 && p.ok),
+       demo.plans.map(p => `${p.name || p.file}${p.ok ? "" : " FAILED: " + (p.error || p.status)}`).join("; "));
+    ok("a profiled design says so, rather than showing arc controls it ignores",
+       /pole profile/.test(demo.noteText || "") && /coil profile/.test(demo.noteText || ""),
+       (demo.noteText || "no note").trim());
+    ok("the shape demo solves from the page", /Solved\. Torque/.test(demo.status), demo.status.trim());
+    okPhysics("the field-line control changes how many lines are drawn", demo.dense > demo.sparse * 2,
+       `${demo.sparse} lines at 0.5x, ${demo.dense} at 4x`);
+
     /* ---- view controls ----------------------------------------------------------------------------- */
     const view = await page.evaluate(async () => {
       document.querySelector("[data-slice='gap']").click();

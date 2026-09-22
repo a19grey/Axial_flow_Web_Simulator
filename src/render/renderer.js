@@ -116,8 +116,19 @@ export function boundingBox(m) {
   return [[m.x0, m.y0, m.z0], [m.x1, m.y1, m.z1]];
 }
 
-/* ---- field lines: RK2 streamlines of B, seeded in proportion to flux ---- */
-function traceLines(sol, bScale) {
+/* ---- field lines: RK2 streamlines of B, seeded in proportion to flux ----
+ *
+ * `density` scales how many lines are drawn: 1 is the long-standing default, and the candidate
+ * grid and the acceptance test are scaled together so the seeds stay spread over the same annulus
+ * rather than bunching. A dense field can therefore be read where a sparse one looks arbitrary.
+ * The seeds are still drawn in proportion to the local gap flux, so where the lines are is still
+ * information; only how many there are is a display choice.
+ *
+ * Two budgets keep the slider from taking the page down: a cap on seeds and a cap on total
+ * segments uploaded. Hitting either is reported rather than hidden.
+ */
+const MAX_LINE_SEGMENTS = 1200000, MAX_LINE_SEEDS = 4000;   // ~38 MB of line buffer at the cap
+function traceLines(sol, bScale, density = 1) {
   const { job } = sol, mesh = job.mesh;
   const bb = boundingBox(mesh);
   const m = 1.5 * mesh.hMax;
@@ -127,14 +138,19 @@ function traceLines(sol, bScale) {
   else if (job.kind === "sphere") { zs = 0; rA = 0; rB = 1.8 * job.a; }
   else { zs = 0; rA = 0.1 * job.R; rB = 0.92 * job.R; }
   const o = [0, 0, 0], cand = [];
+  // Both axes of the candidate grid grow as the square root of the density, so the seeds stay
+  // roughly as far apart radially as they are round the machine at any setting.
+  const k = Math.max(0.1, density);
+  const nRing = Math.max(3, Math.round(7 * Math.sqrt(k))), nAz = Math.max(48, Math.round(120 * Math.sqrt(k)));
   let bmax = 0;
-  for (let ir = 0; ir < 7; ir++) for (let ia = 0; ia < 120; ia++) {
-    const r = rA + (rB - rA) * (ir + 0.5) / 7, a = 2 * Math.PI * (ia + 0.5 * (ir % 2)) / 120;
+  for (let ir = 0; ir < nRing; ir++) for (let ia = 0; ia < nAz; ia++) {
+    const r = rA + (rB - rA) * (ir + 0.5) / nRing, a = 2 * Math.PI * (ia + 0.5 * (ir % 2)) / nAz;
     const x = r * Math.cos(a), y = r * Math.sin(a), bz = Math.abs(S(x, y, zs, o)[2]);
     cand.push([x, y, bz * r]); bmax = Math.max(bmax, bz * r);
   }
   let seed = 12345; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
-  const seeds = cand.filter(c => rnd() < 0.42 * c[2] / bmax).map(c => [c[0], c[1], zs]);
+  const wanted = cand.filter(c => rnd() < 0.42 * c[2] / bmax).map(c => [c[0], c[1], zs]);
+  const seeds = wanted.slice(0, MAX_LINE_SEEDS);
   // Step along the line with the finest cell, so a line through the gap is not stepped over.
   const ds = 0.5 * mesh.hMin, floor = bScale * 1e-3, segs = [];
   const step = (p, sgn) => {
@@ -145,7 +161,10 @@ function traceLines(sol, bScale) {
   };
   const inside = p => p[0] > bb[0][0] + m && p[0] < bb[1][0] - m && p[1] > bb[0][1] + m && p[1] < bb[1][1] - m
                    && p[2] > bb[0][2] + m && p[2] < bb[1][2] - m;
+  let traced = 0;
   for (const s0 of seeds) {
+    if (segs.length >= 8 * MAX_LINE_SEGMENTS) break;
+    traced++;
     for (const sgn of [1, -1]) {
       let p = s0, lp = Math.hypot(...S(p[0], p[1], p[2], o));
       for (let n = 0; n < 900; n++) {
@@ -158,7 +177,7 @@ function traceLines(sol, bScale) {
       }
     }
   }
-  return { data: new Float32Array(segs), count: segs.length / 8, seeds: seeds.length };
+  return { data: new Float32Array(segs), count: segs.length / 8, seeds: traced, wanted: wanted.length };
 }
 
 /* ---- float16 packing for the field texture ---- */
@@ -293,8 +312,8 @@ const WG_FINAL = `${FRAME}
 export const V = {
   ok: false, dirty: true, dev: null, ctx: null, fmt: null, W: 0, H: 0, tex: null,
   cam: { az: -2.25, el: 0.5, dist: 120, target: [0, 0, 2] }, home: null,
-  opt: { volume: true, lines: true, slice: "off", sliceField: "bz", rotor: "ghost", pcb: true, back: true, cut: false, density: 0.35, thr: 0.18, sliceZ: 0 },
-  mesh: {}, lines: null, field: null, box: [[-50, -50, -30], [50, 50, 30]], bScale: 1, bzScale: 1, job: null
+  opt: { volume: true, lines: true, slice: "off", sliceField: "bz", rotor: "ghost", pcb: true, back: true, cut: false, density: 0.35, thr: 0.18, lineDensity: 1, sliceZ: 0 },
+  mesh: {}, lines: null, sol: null, field: null, box: [[-50, -50, -30], [50, 50, 30]], bScale: 1, bzScale: 1, job: null
 };
 export async function initRenderer() {
   const G = await initGPU(), dev = G.device, cv = $("#gl");
@@ -408,9 +427,26 @@ function resampleField(sol, mesh) {
   return [data, tx, ty, tz];
 }
 
+/* Re-trace the field lines of the solution already on screen. Kept separate from updateScene so
+ * the line-count control can be moved without re-uploading the field texture or the meshes: only
+ * the streamlines are recomputed, which is the only thing that changes. */
+export function rebuildLines() {
+  if (!V.ok || !V.sol) return;
+  const L = traceLines(V.sol, V.bScale * 1e-3, V.opt.lineDensity);
+  if (V.lines) V.lines.buf.destroy();
+  if (L.count) {
+    const b = V.dev.createBuffer({ size: L.data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    V.dev.queue.writeBuffer(b, 0, L.data);
+    V.lines = { buf: b, count: L.count, seeds: L.seeds, wanted: L.wanted,
+                bg: V.dev.createBindGroup({ layout: V.pl.lines.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: V.ubo } }, { binding: 1, resource: { buffer: b } }, { binding: 2, resource: V.lut.createView() }, { binding: 3, resource: V.samp }] }) };
+  } else V.lines = null;
+  V.dirty = true;
+}
+
 export function updateScene(sol, keepView) {
   if (!V.ok) return;
   const job = sol.job, mesh = job.mesh;
+  V.sol = sol;
   const { nx, ny, nz } = mesh;
   const cyl = mesh.kind === CYLINDRICAL;
   V.job = job;
@@ -429,11 +465,7 @@ export function updateScene(sol, keepView) {
   setField(...resampleField(sol, mesh));
   for (const m of Object.values(V.mesh)) m.buf.destroy();
   V.mesh = {}; for (const [k, m] of Object.entries(buildMeshes(job))) V.mesh[k] = vbuf(m);
-  const L = traceLines(sol, V.bScale * 1e-3);
-  if (V.lines) V.lines.buf.destroy();
-  if (L.count) { const b = V.dev.createBuffer({ size: L.data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }); V.dev.queue.writeBuffer(b, 0, L.data);
-    V.lines = { buf: b, count: L.count, bg: V.dev.createBindGroup({ layout: V.pl.lines.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: V.ubo } }, { binding: 1, resource: { buffer: b } }, { binding: 2, resource: V.lut.createView() }, { binding: 3, resource: V.samp }] }), seeds: L.seeds }; }
-  else V.lines = null;
+  rebuildLines();
   const zs = $("#sliceZ");
   zs.min = V.box[0][2]; zs.max = V.box[1][2]; zs.step = mesh.hMin / 2;
   if (!keepView) {
@@ -454,7 +486,10 @@ export function updateLegend() {
   $("#barSmax").textContent = fmtB((V.opt.sliceField === "bz" ? V.bzScale : V.bScale) * 1e-3);
   $("#sliceLegend").hidden = V.opt.slice === "off";
   $("#sliceZval").textContent = `${(+V.opt.sliceZ).toFixed(1)} mm`;
-  $("#lineInfo").textContent = V.lines ? `${V.lines.seeds} field lines, seeded in proportion to gap flux` : "";
+  $("#lineInfo").textContent = V.lines
+    ? `${V.lines.seeds} field lines, seeded in proportion to gap flux`
+      + (V.lines.seeds < V.lines.wanted ? ` (${V.lines.wanted} asked for; the rest would not fit in the line budget)` : "")
+    : "";
 }
 function frame() {
   requestAnimationFrame(frame);
@@ -515,6 +550,14 @@ export function hookViewControls() {
     $(id).onchange = e => { V.opt[key] = e.target.checked; V.dirty = true; };
   $("#oDensity").oninput = e => { V.opt.density = +e.target.value; V.dirty = true; };
   $("#oThr").oninput = e => { V.opt.thr = +e.target.value; V.dirty = true; };
+  /* Re-tracing is CPU work over the whole field, so dragging the slider coalesces into one trace
+   * rather than one per pixel of travel. */
+  let lineTimer = null;
+  $("#oLineDensity").oninput = e => {
+    V.opt.lineDensity = +e.target.value;
+    clearTimeout(lineTimer);
+    lineTimer = setTimeout(() => { rebuildLines(); updateLegend(); }, 120);
+  };
   $("#sliceZ").oninput = e => { V.opt.sliceZ = +e.target.value; buildSlices(); updateLegend(); };
   $("#oCut").addEventListener("change", e => { if (e.target.checked && V.opt.slice === "off") document.querySelector('[data-slice="axial"]').click(); });
 }

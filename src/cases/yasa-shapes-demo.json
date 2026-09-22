@@ -1,0 +1,99 @@
+{
+  "format": "axial-flux-project",
+  "version": 2,
+  "name": "Shape demo: YASA-style skewed coils, comma-shaped poles",
+  "notes": "A demonstration of the shape-profile geometry, not an optimized machine. Two things here cannot be drawn with a width and a skew angle. The coils are trapezoids whose inner edge is swung round from their outer edge: at any fixed angle a straight radial line leaves one coil and enters its neighbour part way out, instead of crossing a clean gap between them, which is how a YASA-style winding packs its end turns. The coils still clear each other at every radius - the overlap is along a radius, not at one - and the tool checks that. The rotor poles are comma-shaped: a narrow tail at the bore swung about twenty degrees ahead of a broad head at the rim, the kind of footprint a 3D-printed rotor can have and a laminated one cannot. Both are described by the same profile table, read against normalized radius. Meshed cylindrically, where the pole and coil edges are coordinate surfaces, so the material fractions are exact in angle rather than staircased; the closed-form swept area of each profile is compared against what the rasterizer laid down, which is the check that a shape that draws convincingly also solves as drawn. The rotor angle and current angle are set where this machine actually makes torque: a swung pole aligns with the winding somewhere other than zero, and both were found by sweeping rather than assumed.",
+  "design": {
+    "stator": {
+      "poles": 8,
+      "copperLayers": 4,
+      "innerRadius_mm": 22,
+      "outerRadius_mm": 52,
+      "turnsPerLayer": 7,
+      "peakCurrent_A": 8,
+      "thickness_mm": 1.6,
+      "tracePitch_mm": 0.6,
+      "traceWidth_mm": 0.4,
+      "edgeMargin_mm": 0.5,
+      "copperThickness_um": 70,
+      "coilShape": [
+        {
+          "atRadius": 0.0,
+          "widthFraction": 0.62,
+          "offset_deg": 11
+        },
+        {
+          "atRadius": 0.5,
+          "widthFraction": 0.78,
+          "offset_deg": 3
+        },
+        {
+          "atRadius": 1.0,
+          "widthFraction": 0.88,
+          "offset_deg": -7
+        }
+      ]
+    },
+    "rotor": {
+      "airGap_mm": 2,
+      "mu_r": 25,
+      "poleHeight_mm": 4,
+      "yokeThickness_mm": 5,
+      "poleArcFraction": 0.5,
+      "poleShape": [
+        {
+          "atRadius": 0.0,
+          "widthFraction": 0.26,
+          "offset_deg": 18
+        },
+        {
+          "atRadius": 0.35,
+          "widthFraction": 0.5,
+          "offset_deg": 11
+        },
+        {
+          "atRadius": 0.7,
+          "widthFraction": 0.72,
+          "offset_deg": 3
+        },
+        {
+          "atRadius": 1.0,
+          "widthFraction": 0.8,
+          "offset_deg": -4
+        }
+      ]
+    },
+    "backPlate": {
+      "enabled": true,
+      "mu_r": 25,
+      "thickness_mm": 5,
+      "gapBelowPcb_mm": 1
+    }
+  },
+  "operatingPoint": {
+    "rotorAngle_deg": 12,
+    "currentAngle_elecDeg": 60,
+    "speed_rpm": 1200
+  },
+  "mesh": {
+    "mode": "cylindrical",
+    "activeCellsAcrossDiameter": 180,
+    "cellsAcrossAirGap": 8,
+    "cellsAcrossPoleHeight": 4,
+    "cellsAcrossYoke": 3,
+    "cellsAcrossPcb": 3,
+    "cellsAcrossBackPlate": 3,
+    "cellsAcrossBackGap": 2,
+    "cellsAcrossPoleArc": 96,
+    "sector": true,
+    "growthRatio": 1.2,
+    "farFieldCellFactor": 8,
+    "maxCells": 40000000
+  },
+  "solver": {
+    "tolerance": 1e-05,
+    "maxIterations": 4000,
+    "checkInterval": 32,
+    "stallPatience": 6
+  }
+}

@@ -98,10 +98,12 @@ Every numeric field carries its unit in its name.
     "stator":    { "poles": 4, "copperLayers": 2, "innerRadius_mm": 15, "outerRadius_mm": 40,
                    "turnsPerLayer": 10, "peakCurrent_A": 5, "thickness_mm": 1.6,
                    "copperThickness_um": 35,
-                   "coilCount": null, "phasePattern": null, "coilSense": null },
+                   "coilCount": null, "phasePattern": null, "coilSense": null,
+                   "coilSpanFraction": 1, "coilSkew_deg": 0, "coilShape": null },
     "rotor":     { "airGap_mm": 3, "mu_r": 20, "poleHeight_mm": 3,
                    "yokeThickness_mm": 4, "poleArcFraction": 0.5,
-                   "dualSided": false, "poleSkew_deg": 0, "density_kg_m3": 7650,
+                   "dualSided": false, "poleSkew_deg": 0, "poleShape": null,
+                   "density_kg_m3": 7650,
                    "coreLoss": { "specificLoss_W_per_kg": 4.0, "atFlux_T": 1.5,
                                  "atFrequency_Hz": 50, "fluxExponent": 2.0,
                                  "frequencyExponent": 1.6 } },
@@ -120,7 +122,8 @@ Every numeric field carries its unit in its name.
 }
 ```
 
-`null` means "use the default": the classical winding layout, in the three `coil*` fields. Speed,
+`null` means "use the default": the classical winding layout in the three `coil*` fields, and a
+plain arc in `coilShape` and `poleShape` — see [shape profiles](#shape-profiles). Speed,
 winding temperature, copper thickness and the densities never enter the field solve — they turn a
 solved field into resistance, loss and mass.
 
@@ -158,7 +161,7 @@ The motor axis is **z**, the PCB mid-plane is **z = 0**, and all lengths are in 
 | Part | Description |
 |---|---|
 | Stator PCB | 1.6 mm board carrying 2 or 4 copper layers, with 1.5·P concentrated coils. Each coil is concentric trapezoidal turns at 0.5 mm pitch with 0.34 mm traces. Coil *k* belongs to phase *k* mod 3. The board is non-magnetic. |
-| Rotor | A yoke ring with P salient poles on its underside, facing the PCB across the air gap. Uniform relative permeability μᵣ. Poles can be skewed linearly with radius. |
+| Rotor | A yoke ring with P salient poles on its underside, facing the PCB across the air gap. Uniform relative permeability μᵣ. Poles can be skewed linearly with radius, or given a free footprint with a [shape profile](#shape-profiles). |
 | Second rotor | Optional mirror image below the board — the dual-sided topology. Both rotors are on one shaft, so their torques add, and the opposite rotor replaces the back plate as the flux return. |
 | Back plate | Optional ring below the PCB, with its own μᵣ, closing the flux path. Ignored on a dual-sided machine. |
 
@@ -172,6 +175,46 @@ coils, phase *k* mod 3, all wound the same way round — but `coilCount`, `phase
 `coilSense` describe any other single-layer layout, and the angular period is then *derived* from
 the pattern rather than assumed. A winding that alternates the sense of same-phase coils has no
 plain period and correctly reports one sector, i.e. the full turn.
+
+### Shape profiles
+
+A width fraction and a skew angle can only draw a straight-sided trapezoid. The shapes an
+axial-flux machine actually uses are not that, so any repeated wedge — a rotor pole, a coil — can
+instead carry a **profile**: a small table read against normalized radius, 0 at the inner radius
+and 1 at the outer.
+
+```json
+"poleShape": [
+  { "atRadius": 0.0, "widthFraction": 0.26, "offset_deg": 18 },
+  { "atRadius": 0.35, "widthFraction": 0.50, "offset_deg": 11 },
+  { "atRadius": 0.7,  "widthFraction": 0.72, "offset_deg": 3 },
+  { "atRadius": 1.0,  "widthFraction": 0.80, "offset_deg": -4 }
+]
+```
+
+`widthFraction` is the fraction of the feature's pitch the wedge occupies there, so 1.0 means
+neighbours touch; `offset_deg` swings its centre line. Rows are interpolated linearly and the ends
+are held flat, so two rows are a trapezoid and one row is a plain arc — which is exactly what
+`poleArcFraction` and `poleSkew_deg` describe, and unprofiled designs produce bit-for-bit the
+current paths and material fractions they always did.
+
+Two things this buys, both in `src/cases/yasa-shapes-demo.json`:
+
+- **YASA-style coils.** A coil whose centre line swings further across its radial span than one
+  coil pitch: a straight radial line leaves one coil and enters its neighbour part way out, rather
+  than crossing a clean gap. The coils still clear each other *at every radius* — overlap along a
+  radius is the point, overlap at a radius would be a short, and `shapeClearance` distinguishes
+  them.
+- **Comma-shaped poles.** A narrow tail at the bore swung ahead of a broad head at the rim: a
+  footprint a 3D-printed rotor can have and a laminated one cannot.
+
+The area a profile sweeps is available in closed form, so the volume a region *should* occupy is
+compared against the volume the rasterizer laid down — the check that a shape which draws
+convincingly also solves as drawn. On a cylindrical mesh a profiled wedge is still rasterized
+**exactly**: its edges stay coordinate surfaces in θ, and the radial variation inside a cell is
+integrated rather than sampled, by cutting each cell at the profile's knots and at every radius
+where an edge crosses the cell and applying Simpson's rule where the integrand is quadratic. The
+audit agrees to 1e-12 %, the same as for a plain arc.
 
 Phase currents for rotor angle θᵣ (mechanical) and current angle γ (electrical, from the rotor d-axis):
 
@@ -412,6 +455,15 @@ and PCB, and ribbon traces coloured by phase. The field appears three ways: a ra
 glow of |B| from a filtered `rgba16float` 3D texture; RK2 streamlines of **B** seeded in proportion
 to gap flux; and slices through the gap plane or an axial section. A cutaway mode removes y < 0.
 
+How many field lines are drawn is a control, from a quarter of the default count to six times it.
+Where they are is still information — seeds are drawn in proportion to the local gap flux at any
+setting — but a sparse field can look arbitrary, so the count is the reader's choice. Line tracing
+runs on the solved field already on the page, so moving the control re-traces without re-solving,
+and the seed and segment budgets it stops at are reported rather than hidden.
+
+**Worked examples.** The Project panel loads the case files under `src/cases/` — the same files the
+headless driver runs, not copies of them — including the shape demo above.
+
 ## Project files
 
 **Project (`.json`).** The spec, the view and camera, notes, and a summary of the last solve. The
@@ -453,7 +505,8 @@ See `docs/limitations.md` for the full statement. In short:
 ## Repository layout
 
     index.html  headless.html      the two pages
-    src/core/                      spec, geometry, assembly, solve, torque, metrics, studies, results — no DOM
+    src/core/                      spec, geometry, shapes, assembly, solve, torque, metrics, studies, results — no DOM
+    src/cases/                     worked examples, shared by the page's dropdown and the CLI
     src/gpu/                       device, buffers, shaders, Biot-Savart, CG — no DOM
     src/render/                    3D view and the analytic meshes it shares with the exporter
     src/ui/                        controls, panels, plots, project, export, page wiring

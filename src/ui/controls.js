@@ -61,6 +61,30 @@ export function syncDualSided() {
   }
 }
 
+/* Shape profiles have no form control: they are a table, and the place to author one is the spec
+ * or a case file. The form still has to be honest about them, because a profile overrides the pole
+ * arc and skew boxes sitting right above this note — a design would otherwise look as though it
+ * were set by numbers it ignores. The note says what is in force and offers a way back to the
+ * plain arc. */
+export function syncShapeNote() {
+  const el = $("#shapeNote");
+  if (!el) return;
+  const pole = held.design?.rotor?.poleShape, coil = held.design?.stator?.coilShape;
+  const parts = [];
+  if (pole) parts.push(`a ${pole.length}-point pole profile, which replaces the pole arc and skew above`);
+  if (coil) parts.push(`a ${coil.length}-point coil profile`);
+  el.hidden = !parts.length;
+  if (!parts.length) return;
+  el.innerHTML = `This design carries ${parts.join(" and ")}. `
+    + `<button type="button" class="linkish" id="shapeClear">Use plain arcs instead</button>`;
+  $("#shapeClear").onclick = () => {
+    if (held.design?.rotor) held.design.rotor.poleShape = null;
+    if (held.design?.stator) held.design.stator.coilShape = null;
+    syncShapeNote();
+    announceSpecChange();
+  };
+}
+
 /* Mesh mode is a segmented control rather than an input, so it is held here. */
 export const meshMode = { value: defaultSpec().mesh.mode };
 
@@ -106,6 +130,7 @@ export function readSpec({ name, notes } = {}) {
   raw.notes = (notes ?? $("#projNotes")?.value ?? "").trim();
   const { spec } = normalizeSpec(raw);
   held = JSON.parse(JSON.stringify(spec));
+  syncShapeNote();
   return spec;
 }
 
@@ -135,6 +160,7 @@ export function writeSpec(spec) {
     else skipped.push(path);
   }
   syncDualSided();
+  syncShapeNote();
   if ($("#projName")) $("#projName").value = spec.name || "";
   if ($("#projNotes")) $("#projNotes").value = spec.notes || "";
   announceSpecChange();

@@ -10,6 +10,7 @@
 import { LAYER_Z, RASTER_SUPERSAMPLE } from "./constants.js";
 import { makeMesh, uniformMesh, cellsAcross, CYLINDRICAL } from "./mesh.js";
 import { gradedAxis, symmetricAxis } from "./grading.js";
+import { DEG, resolveShape, shapeAt, shapeOutline, shapeAreaFraction, shapeMaxHalf } from "./shapes.js";
 
 export const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
 
@@ -32,23 +33,43 @@ export function windingLayout(p) {
   return { count, phase, sense };
 }
 
-/* Concentric trapezoidal turns, one group per coil, `layers` copies stacked in z.
+/* The outline one coil is wound along, as a shape profile.
+ *
+ * With no coilShape in the spec this is the wedge the tool has always wound: the full coil pitch
+ * wide at every radius, centred on the coil's own angle, so successive turns nest inside each
+ * other as straight-sided trapezoids. A profile replaces that with a width and a centre offset
+ * that vary with radius, which is what a YASA-style coil needs — see src/core/shapes.js.
+ */
+export function coilShapeOf(p) {
+  const { count } = windingLayout(p);
+  return resolveShape({ count, fraction: p.coilSpan ?? 1, skew: (p.coilSkew || 0) * DEG, profile: p.coilShape });
+}
+
+/* Concentric turns, one group per coil, `layers` copies stacked in z.
+ *
+ * Turn j is the coil outline inset by j pitches plus the edge margin: the inset comes off the
+ * radial ends directly and off the sides as inset/r, which is the angle that same clearance
+ * subtends. A turn that the insets have closed up ends the coil, so a turns count that does not
+ * fit in the copper produces fewer turns rather than crossed traces.
+ *
  * A coil wound the other way round has its outline traversed in reverse, which reverses the
- * current direction in every one of its segments. */
+ * current direction in every one of its segments.
+ */
 export function coilPolys(p) {
   const { count: Nc, phase, sense } = windingLayout(p);
-  const half = Math.PI / Nc;
+  const shape = coilShapeOf(p);
   const pitch = p.pitch, edge = p.edge, nArc = p.arcSegments ?? 10;
+  /* A straight-sided coil has nothing between its corners, so its sides stay single chords — that
+   * is the geometry, not a coarse sampling of it. A profiled coil's sides curve, and are sampled. */
+  const sideSegs = shape.constant ? 1 : Math.max(2, Math.round(p.coilSideSegments ?? 12));
   const polys = [];
   for (let k = 0; k < Nc; k++) {
     const th = k * 2 * Math.PI / Nc, ph = phase[k];
     for (let j = 0; j < p.turns; j++) {
-      const d = edge + j * pitch, ri = p.ri + d, ro = p.ro - d;
-      const ai = half - d / ri, ao = half - d / ro;
-      if (ro - ri < 1 || ai < 0.02) break;
-      const pts = [[ri * Math.cos(th - ai), ri * Math.sin(th - ai)]];
-      for (let s = 0; s <= nArc; s++) { const a = th - ao + 2 * ao * s / nArc; pts.push([ro * Math.cos(a), ro * Math.sin(a)]); }
-      for (let s = 0; s <= nArc; s++) { const a = th + ai - 2 * ai * s / nArc; pts.push([ri * Math.cos(a), ri * Math.sin(a)]); }
+      const d = edge + j * pitch;
+      const pts = shapeOutline(shape, { r0: p.ri + d, r1: p.ro - d, centre: th, inset: d,
+                                        sideSegs, arcSegs: nArc });
+      if (!pts) break;
       polys.push({ pts: sense[k] < 0 ? pts.slice().reverse() : pts, ph, coil: k, sense: sense[k] });
     }
   }
@@ -157,6 +178,14 @@ export function angularPeriod(p) {
 
 /* ---- regions ------------------------------------------------------------------------------- */
 
+/* The rotor pole footprint, as a shape profile. `poleArcFraction` and `poleSkew_deg` describe a
+ * straight-sided arc; `poleShape` replaces them with a free profile, which is how a 3D-printed
+ * rotor gets a comma-shaped pole that a fraction and a skew cannot draw. */
+export function poleShapeOf(p) {
+  return resolveShape({ count: Math.round(p.poles), fraction: p.arc, skew: (p.skew || 0) * DEG,
+                        profile: p.poleShape });
+}
+
 /* The magnetic parts of the machine, as a list rather than as branches in the rasterizer.
  *
  * Every part of an axial-flux machine is an annular sector extrusion: a radial interval, an axial
@@ -164,15 +193,16 @@ export function angularPeriod(p) {
  * rasterizers loop over a list, a second rotor is another two entries rather than another branch,
  * and the mass calculation can use exactly the same geometry the field solve used.
  *
- * `arc` null means the region fills the whole annulus. Otherwise it is `count` arcs each spanning
- * `fraction` of the pitch, centred at `phase` and skewed linearly with radius by `skew` radians
- * end to end across r0..r1.
+ * `arc` null means the region fills the whole annulus. Otherwise it is `count` copies of one
+ * wedge, nominally centred at `phase` + k * pitch, whose width and centre offset are read off a
+ * shape profile as a function of radius (src/core/shapes.js). A plain arc of constant width, with
+ * or without linear skew, is the profile every design had before profiles existed.
  */
 export function motorRegions(p) {
   const g = motorGeom(p), R = [];
   const th0 = p.theta * Math.PI / 180;
-  const skew = (p.skew || 0) * Math.PI / 180;
-  const poleArc = { count: p.poles, fraction: p.arc, phase: th0, skew };
+  const poleShape = poleShapeOf(p);
+  const poleArc = { count: p.poles, phase: th0, shape: poleShape, pitchAngle: poleShape.pitch };
   const full = null;
 
   R.push({ name: "rotorPoles", mu_r: p.murRot, rho: p.rotorRho, group: "rotorTop",
@@ -196,7 +226,9 @@ export function motorRegions(p) {
  * volume the rasterizer actually laid down is a direct check on the rasterizer. */
 export function regionVolume(r) {
   const annulus = Math.PI * (r.r1 * r.r1 - r.r0 * r.r0);
-  const frac = r.arc ? Math.min(1, r.arc.fraction) : 1;   // skew moves an arc, it does not resize it
+  // The profile's swept area is closed-form, so this stays an independent check on the rasterizer
+  // however complicated the footprint gets. Centre offsets move a wedge, they do not resize it.
+  const frac = r.arc ? shapeAreaFraction(r.arc.shape, r.r0, r.r1) : 1;
   return annulus * frac * (r.z1 - r.z0);
 }
 
@@ -342,13 +374,62 @@ function arcOverlap(t0, t1, th0, count, halfArc) {
   return total;
 }
 
-/* Arc centre offset at radius r for a skewed pole: a linear ramp of `skew` radians end to end
- * across the region's radial span, measured about the mid-radius so skew does not rotate the
- * machine as a whole. */
-function skewPhase(arc, r0, r1, r) {
-  if (!arc.skew) return arc.phase;
-  const mid = 0.5 * (r0 + r1), span = Math.max(1e-9, r1 - r0);
-  return arc.phase + arc.skew * (r - mid) / span;
+/* The wedge's half-width and centre angle at radius r, read off its profile. Normalized radius is
+ * clamped, so a sample just outside the region reads the nearest end of the profile rather than
+ * extrapolating it. */
+function arcAt(arc, r0, r1, r) {
+  const u = Math.min(1, Math.max(0, (r - r0) / Math.max(1e-12, r1 - r0)));
+  const { half, off } = shapeAt(arc.shape, u);
+  return { half, centre: arc.phase + off };
+}
+
+/* The angular fraction of one (r, theta) cell that a profiled wedge covers — exactly.
+ *
+ * The wedge's edges sweep across the cell as r increases, so the covered angle is a function of r
+ * and the cell's fraction is its r-weighted average. Sampling that at the cell centre would be a
+ * midpoint rule, which shows up in the volume audit at parts in 10^5 — small, but it would quietly
+ * cost the cylindrical mesh the one property it exists for.
+ *
+ * Instead the radial span is cut at every radius where the answer stops being a quadratic in r:
+ * the profile's own knots, and every radius where a wedge edge crosses one end of the cell. In
+ * between, the edges are linear in r and the covered angle is linear in r, so the integrand —
+ * covered angle times r — is quadratic and Simpson's rule is exact. The result is the true cell
+ * fraction to round-off, for any piecewise-linear profile.
+ */
+function arcFractionOverCell(arc, r0, r1, ra, rb, t0, t1) {
+  const cuts = [ra, rb];
+  const push = r => { if (r > ra + 1e-12 && r < rb - 1e-12) cuts.push(r); };
+  // The profile is flat outside r0..r1, so those two radii are kinks as much as the knots are.
+  for (const q of arc.shape.pts) push(r0 + q.u * (r1 - r0));
+  push(r0); push(r1);
+  cuts.sort((a, b) => a - b);
+
+  // Edge crossings, piece by piece: within a piece both edges are linear in r.
+  const edges = r => { const { half, centre } = arcAt(arc, r0, r1, r); return [centre - half, centre + half]; };
+  const crossings = [];
+  for (let i = 0; i < cuts.length - 1; i++) {
+    const a = cuts[i], b = cuts[i + 1], ea = edges(a), eb = edges(b);
+    for (let sgn = 0; sgn < 2; sgn++) {
+      const va = ea[sgn], vb = eb[sgn];
+      if (Math.abs(vb - va) < 1e-15) continue;
+      const lo = Math.min(va, vb), hi = Math.max(va, vb);
+      const kMin = Math.floor((t0 - hi) / arc.pitchAngle) - 1, kMax = Math.ceil((t1 - lo) / arc.pitchAngle) + 1;
+      for (let k = kMin; k <= kMax; k++) for (const t of [t0, t1]) {
+        const r = a + (t - k * arc.pitchAngle - va) * (b - a) / (vb - va);
+        if (r > a + 1e-12 && r < b - 1e-12) crossings.push(r);
+      }
+    }
+  }
+  const all = [...cuts, ...crossings].sort((x, y) => x - y);
+
+  const f = r => { const { half, centre } = arcAt(arc, r0, r1, r); return arcOverlap(t0, t1, centre, arc.count, half) * r; };
+  let I = 0;
+  for (let i = 0; i < all.length - 1; i++) {
+    const a = all[i], b = all[i + 1];
+    if (b - a < 1e-14) continue;
+    I += (b - a) / 6 * (f(a) + 4 * f(0.5 * (a + b)) + f(b));   // exact: the integrand is quadratic here
+  }
+  return I / (0.5 * (rb * rb - ra * ra) * (t1 - t0));
 }
 
 /* Cylindrical rasterization is *exact*.
@@ -379,18 +460,20 @@ function rasterizeCylindrical(mesh, p, regions, volumes) {
     }
     let fArc = null, fArcRT = null;
     if (reg.arc) {
-      const halfArc = reg.arc.fraction * Math.PI / reg.arc.count;
-      if (reg.arc.skew) {
-        fArcRT = new Float64Array(nr * nt);
-        for (let i = 0; i < nr; i++) {
-          const th0 = skewPhase(reg.arc, reg.r0, reg.r1, mesh.xc[i]);
-          for (let j = 0; j < nt; j++)
-            fArcRT[i * nt + j] = arcOverlap(the[j], the[j + 1], th0, reg.arc.count, halfArc) / (the[j + 1] - the[j]);
-        }
-      } else {
+      /* A wedge of constant width and no offset is the same in every ring, so it costs one
+       * angular table. Anything that varies with radius — a skew, a comma, any profile — costs an
+       * nr x ntheta table and is still exact per cell, because the wedge is still bounded by two
+       * angles at every radius. */
+      if (reg.arc.shape.constant) {
+        const halfArc = reg.arc.shape.pts[0].half;
         fArc = new Float64Array(nt);
         for (let j = 0; j < nt; j++)
           fArc[j] = arcOverlap(the[j], the[j + 1], reg.arc.phase, reg.arc.count, halfArc) / (the[j + 1] - the[j]);
+      } else {
+        fArcRT = new Float64Array(nr * nt);
+        for (let i = 0; i < nr; i++)
+          for (let j = 0; j < nt; j++)
+            fArcRT[i * nt + j] = arcFractionOverCell(reg.arc, reg.r0, reg.r1, re[i], re[i + 1], the[j], the[j + 1]);
       }
     }
     return { reg, index, fRad, fArc, fArcRT, inv: 1 / reg.mu_r };
@@ -449,7 +532,9 @@ function rasterizeCartesian(mesh, p, regions, volumes) {
       const fz = overlap(za, zb, reg.z0, reg.z1) / dz;
       if (fz > 0) live.push({ reg, fz, index: n, inv: 1 / reg.mu_r,
                               pitch: reg.arc ? 2 * Math.PI / reg.arc.count : 0,
-                              halfArc: reg.arc ? reg.arc.fraction * Math.PI / reg.arc.count : 0 });
+                              // Constant-width wedges skip the per-sample profile lookup entirely.
+                              flat: reg.arc ? reg.arc.shape.constant : false,
+                              halfArc: reg.arc && reg.arc.shape.constant ? reg.arc.shape.pts[0].half : 0 });
     }
     if (!live.length) continue;
     const hit = new Float64Array(live.length);
@@ -472,9 +557,11 @@ function rasterizeCartesian(mesh, p, regions, volumes) {
             if (r < L.reg.r0 || r > L.reg.r1) continue;
             if (L.reg.arc) {
               const m = L.pitch;
-              let d = th - skewPhase(L.reg.arc, L.reg.r0, L.reg.r1, r);
+              let centre = L.reg.arc.phase, halfArc = L.halfArc;
+              if (!L.flat) ({ half: halfArc, centre } = arcAt(L.reg.arc, L.reg.r0, L.reg.r1, r));
+              let d = th - centre;
               d = ((d % m) + m + m / 2) % m - m / 2;
-              if (Math.abs(d) >= L.halfArc) continue;
+              if (Math.abs(d) >= halfArc) continue;
             }
             hit[n]++;
           }
@@ -505,7 +592,8 @@ export function buildMotor(p) {
   const segKey = JSON.stringify([mesh.kind, mesh.nx, mesh.ny, mesh.nz, mesh.x0, mesh.x1, mesh.y0, mesh.y1,
                                  mesh.z0, mesh.hMin, mesh.hMax, mesh.sectors,
                                  p.poles, p.ri, p.ro, p.turns, p.layers, p.pitch, p.edge,
-                                 p.coilCount, p.phasePattern, p.coilSense]);
+                                 p.coilCount, p.phasePattern, p.coilSense,
+                                 p.coilShape, p.coilSpan, p.coilSkew, p.coilSideSegments]);
   return { kind: "motor", p, mesh, mu, volumes, polys, segs, segKey, zLay, g };
 }
 
@@ -531,7 +619,8 @@ export function meshResolution(mesh, p) {
   }
   if (cyl) {
     // Angular cells spanning one pole arc: the feature the theta mesh exists to resolve.
-    const arcSpan = p.arc * 2 * Math.PI / p.poles;
+    // The widest the pole ever gets: the angular feature the theta mesh has to resolve.
+    const arcSpan = 2 * shapeMaxHalf(poleShapeOf(p));
     res.poleArc = arcSpan / ((mesh.y1 - mesh.y0) / mesh.ny);
     res.polePitch = (2 * Math.PI / p.poles) / ((mesh.y1 - mesh.y0) / mesh.ny);
   }

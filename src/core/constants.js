@@ -9,7 +9,10 @@ export const PCB = {
   tracePitch_mm: 0.5,       // radial pitch between concentric turns
   traceWidth_mm: 0.34,      // copper width, used by the SVG export
   edgeMargin_mm: 0.4,       // clearance from the coil outline to the first turn
-  arcSegments: 10           // straight segments per trapezoid arc
+  arcSegments: 10,          // straight segments per trapezoid arc
+  /* Samples along each radial side of a *profiled* coil turn. A straight-sided turn has none: its
+   * sides are single chords, which is the geometry rather than a coarse sampling of it. */
+  coilSideSegments: 12
 };
 
 /* Layer z-positions (mm, relative to the board mid-plane) for 2- and 4-layer stacks. */

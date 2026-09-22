@@ -168,6 +168,7 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
       <div><label for="arc">Pole arc / pole pitch</label><input id="arc" type="number" value="0.5" step="0.05" min="0.1" max="0.95"></div>
       <div><label for="skew">Pole skew (° mech)</label><input id="skew" type="number" value="0" step="2"></div>
     </div>
+    <p id="shapeNote" class="muted small" style="margin:6px 0 0" hidden></p>
     <label style="display:flex;gap:8px;align-items:center;margin-top:14px;color:var(--ink);font-weight:600"><input id="dual" type="checkbox"> Rotor on both sides (dual-sided)</label>
     <p id="dualNote" class="muted small" style="margin:4px 0 0" hidden>A mirrored rotor below the board. The stator works into two gaps and the opposite rotor is the flux return, so the back plate is not used.</p>
     <label style="display:flex;gap:8px;align-items:center;margin-top:14px;color:var(--ink);font-weight:600"><input id="back" type="checkbox" checked> Back plate under PCB</label>
@@ -253,6 +254,7 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
         <div class="tgroup"><h3>Field</h3>
           <label class="chk"><input type="checkbox" id="oVolume" checked> Volume glow of |B|</label>
           <label class="chk"><input type="checkbox" id="oLines" checked> Field lines</label>
+          <label for="oLineDensity">Field-line count</label><input id="oLineDensity" type="range" min="0.25" max="6" step="0.25" value="1">
           <label for="oDensity">Volume density</label><input id="oDensity" type="range" min="0" max="1.5" step="0.01" value="0.35">
           <label for="oThr">Volume threshold</label><input id="oThr" type="range" min="0" max="0.9" step="0.01" value="0.18">
           <div id="lineInfo" class="muted small" style="margin-top:6px"></div>
@@ -275,6 +277,11 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
 
   <aside class="results" aria-label="Results">
     <div class="panel"><h2>Project</h2>
+      <label for="presetPick">Worked examples</label>
+      <select id="presetPick">
+        <option value="">Choose a design to load…</option>
+      </select>
+      <p id="presetNote" class="muted small" style="margin:6px 0 12px"></p>
       <label for="projName">Name</label><input id="projName" type="text" placeholder="Untitled motor" maxlength="80">
       <label for="projNotes">Notes</label><textarea id="projNotes" rows="2" placeholder="What this variant is testing"></textarea>
       <div class="row2">

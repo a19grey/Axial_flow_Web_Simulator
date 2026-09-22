@@ -8,6 +8,8 @@
  */
 
 import { css } from "../ui/format.js";
+import { shapeAt } from "../core/shapes.js";
+import { poleShapeOf } from "../core/geometry.js";
 
 export const rgba = (hex, spec = 0) => { const n = parseInt(hex.slice(1), 16); return ((n >> 16) & 255) | (((n >> 8) & 255) << 8) | ((n & 255) << 16) | (Math.round(spec * 255) << 24); };
 export class MeshB {
@@ -39,6 +41,9 @@ export function annular(mb, r0, r1, a0, a1, z0, z1, col) {
   }
 }
 export function rotorSolid(mb, p, g, col) {
+  /* A profiled pole is drawn as its own solid standing on the yoke ring. An arc — skewed or not —
+   * keeps the fused shell below, so every design that predates profiles exports exactly as it did. */
+  if (p.poleShape) return rotorProfiled(mb, p, g, col);
   // One watertight solid: a yoke ring with the salient poles fused to its underside.
   const TAU = 2 * Math.PI, P2 = TAU / p.poles, half = p.arc * P2 / 2, th0 = p.theta * Math.PI / 180;
   const wrap = a => ((a % TAU) + TAU) % TAU, brk = new Set();
@@ -74,6 +79,48 @@ export function rotorSolid(mb, p, g, col) {
     }
   }
 }
+/* One wedge of a shape profile as a closed solid: the surface the 3D view draws and the STL
+ * export writes for a rotor pole whose footprint is a profile rather than an arc.
+ *
+ * The footprint is walked as a grid — radius across u, angle across v — so both the sides and the
+ * inner and outer ends follow the shape. A straight-sided arc does not come through here at all;
+ * it keeps the fused yoke-and-poles solid below, which is what the exports have always contained.
+ */
+export function shapePrism(mb, shape, { r0, r1, centre, z0, z1, uSegs = 24, vSegs = 24 }, col) {
+  const dr = r1 - r0;
+  const P = (iu, iv, z) => {
+    const u = iu / uSegs, { half, off } = shapeAt(shape, u);
+    const r = r0 + u * dr, a = centre + off - half + 2 * half * iv / vSegs;
+    return [r * Math.cos(a), r * Math.sin(a), z];
+  };
+  const up = [0, 0, 1], dn = [0, 0, -1];
+  for (let iu = 0; iu < uSegs; iu++) for (let iv = 0; iv < vSegs; iv++) {
+    mb.quad(P(iu, iv, z1), P(iu + 1, iv, z1), P(iu + 1, iv + 1, z1), P(iu, iv + 1, z1), up, up, up, up, col);
+    mb.quad(P(iu, iv, z0), P(iu, iv + 1, z0), P(iu + 1, iv + 1, z0), P(iu + 1, iv, z0), dn, dn, dn, dn, col);
+  }
+  /* The four walls. The normal is the horizontal perpendicular to the wall's own edge, pointing
+   * away from the wedge, which is exact for a straight edge and a good shading approximation for
+   * a curving one. */
+  const wall = (a, b, flip) => {
+    const t = [b[0] - a[0], b[1] - a[1]], l = Math.hypot(t[0], t[1]) || 1;
+    const n = [(flip ? -1 : 1) * t[1] / l, (flip ? 1 : -1) * t[0] / l, 0];
+    mb.quad([a[0], a[1], z0], [b[0], b[1], z0], [b[0], b[1], z1], [a[0], a[1], z1], n, n, n, n, col);
+  };
+  for (let iv = 0; iv < vSegs; iv++) { wall(P(0, iv + 1, 0), P(0, iv, 0), false); wall(P(uSegs, iv, 0), P(uSegs, iv + 1, 0), false); }
+  for (let iu = 0; iu < uSegs; iu++) { wall(P(iu, 0, 0), P(iu + 1, 0, 0), false); wall(P(iu + 1, vSegs, 0), P(iu, vSegs, 0), false); }
+}
+
+/* The rotor as a yoke ring with profiled poles standing on it. Two solids that meet exactly on the
+ * yoke's lower face rather than one fused shell: a free-form footprint has no guaranteed relation
+ * to the yoke's angular breaks, and a union built by hand would be the kind of geometry that looks
+ * right and exports broken. */
+function rotorProfiled(mb, p, g, col) {
+  const shape = poleShapeOf(p), th0 = p.theta * Math.PI / 180, pitch = 2 * Math.PI / p.poles;
+  annular(mb, g.Rri, g.Rro, 0, 2 * Math.PI, g.zTT, g.zYT, col);
+  for (let k = 0; k < p.poles; k++)
+    shapePrism(mb, shape, { r0: g.Rri, r1: g.Rro, centre: th0 + k * pitch, z0: g.zTB, z1: g.zTT }, col);
+}
+
 export function ribbon(mb, pts, z, w, col, closed = true) {
   const n = pts.length, off = [], nz = [0, 0, 1];
   for (let i = 0; i < n; i++) {

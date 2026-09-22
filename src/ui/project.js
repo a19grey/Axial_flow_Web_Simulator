@@ -51,7 +51,7 @@ export async function applyProject(obj, { solve = true } = {}) {
 
   const view = obj.view || {};
   for (const k of ["volume", "lines", "pcb", "back", "cut"]) if (typeof view[k] === "boolean") V.opt[k] = view[k];
-  for (const k of ["density", "thr", "sliceZ"]) if (Number.isFinite(view[k])) V.opt[k] = view[k];
+  for (const k of ["density", "thr", "lineDensity", "sliceZ"]) if (Number.isFinite(view[k])) V.opt[k] = view[k];
   if (["off", "gap", "axial"].includes(view.slice)) V.opt.slice = view.slice;
   if (["bz", "bmag"].includes(view.sliceField)) V.opt.sliceField = view.sliceField;
   if (["solid", "ghost", "hidden"].includes(view.rotor)) V.opt.rotor = view.rotor;
@@ -89,7 +89,7 @@ export function syncViewControls() {
   const set = (id, v) => { const el = $(id); if (el) el[el.type === "checkbox" ? "checked" : "value"] = v; };
   set("#oVolume", V.opt.volume); set("#oLines", V.opt.lines); set("#oPcb", V.opt.pcb);
   set("#oBack", V.opt.back); set("#oCut", V.opt.cut);
-  set("#oDensity", V.opt.density); set("#oThr", V.opt.thr);
+  set("#oDensity", V.opt.density); set("#oThr", V.opt.thr); set("#oLineDensity", V.opt.lineDensity);
   for (const [attr, val] of [["data-slice", V.opt.slice], ["data-sfield", V.opt.sliceField], ["data-rotor", V.opt.rotor]])
     document.querySelectorAll(`[${attr}]`).forEach(b => b.setAttribute("aria-pressed", String(b.getAttribute(attr) === val)));
   V.dirty = true;
@@ -158,6 +158,52 @@ export function renderLibrary() {
   });
 }
 
+/* ---- worked examples ------------------------------------------------------------------------------
+ *
+ * The case files under src/cases are the same JSON the CLI runs, so a design listed here and a
+ * design run headless are one file, not two copies that can drift. A static host has no directory
+ * listing, so the list is held here; the blurb is short because each file carries its own notes,
+ * which land in the Notes box when it loads.
+ */
+export const PRESETS = [
+  { file: "pcb-reluctance-80mm.json", label: "PCB reluctance, 80 mm", blurb: "the default machine; solves in under a second" },
+  { file: "yasa-shapes-demo.json", label: "Shape demo: skewed coils, comma poles", blurb: "profiled geometry neither a width nor a skew can draw" },
+  { file: "scale-370mm.json", label: "370 mm scale test, 3 mm gap", blurb: "the graded-mesh case; a few million cells" },
+  { file: "dual-rotor-370mm.json", label: "370 mm dual rotor", blurb: "a rotor on both sides, no back plate" }
+];
+
+export function hookPresets() {
+  const sel = $("#presetPick"), note = $("#presetNote");
+  if (!sel) return;
+  for (const p of PRESETS) {
+    const o = document.createElement("option");
+    o.value = p.file; o.textContent = p.label;
+    sel.append(o);
+  }
+  const describe = () => {
+    const p = PRESETS.find(q => q.file === sel.value);
+    if (note) note.textContent = p ? p.blurb : "Worked examples, loaded from the same case files the headless driver runs.";
+  };
+  describe();
+  sel.onchange = async () => {
+    const p = PRESETS.find(q => q.file === sel.value);
+    describe();
+    if (!p) return;
+    setStatus(`Loading "${p.label}"…`);
+    try {
+      // Relative, because the tool is served from a subdirectory of a larger site.
+      const res = await fetch(`./src/cases/${p.file}`, { cache: "no-cache" });
+      if (!res.ok) throw new Error(`the case file returned ${res.status}`);
+      await applyProject(await res.json());
+    } catch (e) {
+      setStatus(`Couldn't load "${p.label}": ${e.message}`, true);
+    } finally {
+      sel.value = "";
+      describe();
+    }
+  };
+}
+
 /* ---- wiring -------------------------------------------------------------------------------------- */
 
 export function hookProjectUI() {
@@ -186,6 +232,7 @@ export function hookProjectUI() {
     const { blob, filename } = buildModelZip(p, proj);
     await saveFile(filename, blob);
   };
+  hookPresets();
   renderLibrary();
   getDownloads().then(dl => {
     for (const id of ["#projSaveFile", "#projExport"]) { $(id).disabled = !dl; $(id).hidden = !dl; }
