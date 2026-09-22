@@ -28,7 +28,19 @@
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.5}
-header{padding:28px 28px 8px;max-width:1560px;margin:0 auto}
+header{padding:22px 28px 8px;max-width:1560px;margin:0 auto}
+/* The brand bar. The logo is a 1411x562 PNG on transparency, mid-grey and orange, so it reads
+   on both the light and the dark background without a second asset. Height is fixed and the
+   width follows, which keeps the link target the size of the mark itself. */
+.brand{display:inline-flex;align-items:center;margin:0 0 14px}
+.brand img{height:38px;width:auto;display:block}
+@media (max-width:760px){.brand img{height:30px}}
+.brand:focus-visible{outline:2px solid var(--gpu);outline-offset:4px;border-radius:4px}
+footer{max-width:1560px;margin:0 auto;padding:18px 28px 40px;border-top:1px solid var(--line);
+  color:var(--muted);font-size:13px;display:flex;gap:6px 18px;flex-wrap:wrap;align-items:baseline}
+footer a{color:var(--muted)}
+footer a:hover{color:var(--ink)}
+@media (max-width:760px){footer{padding:16px 16px 28px}}
 h1{font-family:"IBM Plex Sans Condensed","IBM Plex Sans",sans-serif;font-weight:600;font-size:clamp(26px,3.4vw,40px);line-height:1.1;margin:0 0 8px;letter-spacing:-.01em}
 .lede{margin:0;color:var(--muted);max-width:80ch}
 .layout{display:grid;grid-template-columns:270px minmax(0,1fr) 320px;gap:20px;padding:20px 28px;max-width:1560px;margin:0 auto;align-items:start}
@@ -111,6 +123,9 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
 </head>
 <body>
 <header>
+  <a class="brand" href="https://greylabs86.com" title="Grey Labs">
+    <img src="./GreylabsLogo.png" alt="Grey Labs" width="1411" height="562">
+  </a>
   <h1>Axial-flux field solver in 3D, on the GPU</h1>
   <p class="lede">PCB traces become line-current segments whose free-space field is summed by Biot-Savart in a compute shader. The magnetic rotor and back plate then respond through a reduced scalar potential: H = H<sub>s</sub> − ∇φ, with ∇·(μ∇φ) = ∇·(μH<sub>s</sub>), solved by conjugate gradients on a 3D grid. Torque comes from the Maxwell stress tensor on a box around the rotor.</p>
 </header>
@@ -291,6 +306,12 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
   <p>Project files are plain JSON with units in every field name. They hold the design parameters, view settings and a summary of the last solve, but not the field itself; opening one re-solves, which reproduces the result. The model export is a zip with an OBJ of every part, printable STLs, and an SVG of the copper pattern.</p>
   <p>The 3D view draws the machine from its analytic geometry (smooth arcs, trace ribbons), not the solver grid. The field is uploaded as a filtered 3D texture and ray-marched on the GPU; field lines are streamlines of B traced through that same field. The outer box is held at φ = 0, with a margin around the machine. Torque is integrated on two box surfaces whose bottom faces sit at different heights in the air gap. Close agreement between the two estimates is a useful check on grid resolution.</p>
 </section>
+
+<footer>
+  <span>&copy; 2026 Alex Krause, PhD</span>
+  <span>A <a href="https://greylabs86.com">Grey Labs</a> project</span>
+  <span><a href="https://github.com/a19grey/Axial_flow_Web_Simulator">Source on GitHub</a></span>
+</footer>
 
 <script type="module" src="./src/ui/app.js"></script>
 </body>
