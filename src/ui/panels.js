@@ -44,6 +44,9 @@ export function resultPanel(sol) {
     $("#res").innerHTML = `
       <div class="muted" style="font-size:13px">Torque on rotor</div>
       <div class="big">${(Tm * 1e3).toFixed(3)} mN·m</div>
+      ${d.perUnit.airgapShear_psi === null ? "" : `<div class="muted" style="font-size:13px;margin-top:6px">Air-gap shear stress, over ${d.perUnit.workingGaps === 2 ? "two working gaps" : "the working gap"}</div>
+      <div class="big">${d.perUnit.airgapShear_psi.toFixed(3)} psi</div>
+      <div class="muted" style="font-size:12px;margin-bottom:4px">${d.perUnit.airgapShear_kPa.toFixed(2)} kPa — torque divided by the r-weighted gap area, so it does not reward a larger rotor for being larger. Good machines run 3–6 psi air-cooled and reach about 14 psi, one atmosphere, at the top end.</div>`}
       <div style="font-size:13px;margin-bottom:8px">${agree === null ? "Only one stress surface fits in the gap, so there is no spread to report." : `Mean of ${T.length} stress surfaces across the gap, spread <span class="${agree < 5 ? "pass" : "fail"}">${agree.toFixed(2)}%</span>`}</div>
       <table>
         ${T.length > 1 ? `<tr class="sub"><td>Range over the ${T.length} surfaces</td><td>${(Math.min(...T) * 1e3).toFixed(4)} – ${(Math.max(...T) * 1e3).toFixed(4)} mN·m</td></tr>` : ""}

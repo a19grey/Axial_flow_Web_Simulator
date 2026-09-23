@@ -322,6 +322,9 @@ async function main() {
               dual.res.match(/Imbalance between them\s*([\d.]+%)/)?.[1] || "");
     ok("the derived metrics reach the panel",
        /Phase resistance/.test(dual.res) && /Torque density/.test(dual.res) && /Meshed volume vs exact/.test(dual.res));
+    ok("air-gap shear stress is reported in psi, over both gaps",
+       /psi/.test(dual.res) && /two working gaps/.test(dual.res),
+       dual.res.match(/([\d.]+)\s*psi/)?.[0] || "no psi line");
 
     /* ---- a cross-check runs from its button -----------------------------------------------------
      * Inductance is the cheapest of the three (three solves, no rotor motion), so it is the one the

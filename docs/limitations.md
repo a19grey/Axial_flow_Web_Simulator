@@ -104,6 +104,7 @@ in how much they can be trusted.
 | Torque, virtual work | field, co-energy derivative | agrees with the above to 0.09% (370 mm) and 1.7% (80 mm) |
 | ΔL, Ld − Lq, saliency | field, reciprocity identity | reciprocal to 0.003%; all saliency lives here |
 | Stored energy | field, face sum | two routes agree to 0.06% |
+| Air-gap shear stress | torque ÷ the r-weighted gap area | exactly as good as the torque; the area is closed form |
 | Mass, volumes | closed form from the region list | exact; cross-checked against what the mesh laid down |
 | Winding resistance | modelled trace length and cross-section | a lower bound: no interconnect |
 | L₀, the air-core inductance | Neumann over filaments, GMD-regularized | ~0.2% against a closed form, but a filament model of a real trace |

@@ -291,9 +291,15 @@ and is zero at 0° and 90°. The γ sweep plots this directly.
 ## What a solve reports
 
 Beyond the field, every solve carries winding resistance at the stated temperature, copper loss at
-the stated current, the mass of each part, torque density, torque per amp and per √W, and the
-volume the mesh gave each region against that region's exact volume. None of it costs another GPU
+the stated current, the mass of each part, torque density, torque per amp and per √W, the air-gap
+shear stress, and the volume the mesh gave each region against that region's exact volume. None of it costs another GPU
 pass.
+
+Shear stress is the size-free one, and the reason it sits next to the torque: it is the torque
+divided by the lever-arm-weighted gap area, `T / (n_gaps · (2π/3)(ro³ − ri³))`, so a design does not
+get credit simply for having a larger rotor. It is quoted in psi as well as kPa because the best
+machines top out near 14 psi — one atmosphere — which is a coincidence only in the sense that both
+numbers are set by the same scale, and a convenient yardstick either way.
 
 The characterizations that genuinely need more solves are separate calls, so their cost is visible:
 

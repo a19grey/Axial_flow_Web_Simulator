@@ -254,6 +254,7 @@ export function derivedMetrics(sol) {
   const omega = Math.abs(p.rpm) * 2 * Math.PI / 60;
   const T = m.torque;
   const shaft_W = T === null ? null : T * omega;
+  const shear = airgapShear(sol);
 
   return {
     winding: {
@@ -285,9 +286,54 @@ export function derivedMetrics(sol) {
     perUnit: {
       torqueDensity_Nm_per_kg: T === null || mass.total_kg <= 0 ? null : T / mass.total_kg,
       torquePerRootWatt_Nm_per_sqrtW: T === null || copper_W <= 0 ? null : T / Math.sqrt(copper_W),
-      torquePerAmp_mNm_per_A: T === null || p.amps === 0 ? null : T * 1e3 / p.amps
+      torquePerAmp_mNm_per_A: T === null || p.amps === 0 ? null : T * 1e3 / p.amps,
+      /* The size-free figure of merit: tangential force per unit of swept air-gap area. Good
+       * machines land near 100 kPa, which is about 14 psi, near enough to atmospheric pressure to
+       * be a useful thing to hold in your head. */
+      airgapShear_kPa: shear.kPa,
+      airgapShear_psi: shear.psi,
+      airgapSweptArea_mm2: shear.area_mm2,
+      workingGaps: shear.gaps
     },
     rasterization: rasterizationCheck(job)
+  };
+}
+
+/* ---- air-gap shear stress -------------------------------------------------------------------- */
+
+const PSI_PER_PA = 1 / 6894.757293168361;
+
+/* Torque divided by the lever arm and the area it acts over, which is the honest way to compare
+ * machines of different diameters: torque alone rewards a bigger rotor for being bigger.
+ *
+ * A uniform tangential traction sigma over an annular gap gives
+ *
+ *     T = n_gaps * integral_ri^ro sigma * r * (2 pi r) dr = n_gaps * sigma * (2 pi / 3) (ro^3 - ri^3),
+ *
+ * so sigma is the torque divided by that r-weighted area. A dual-sided machine has two working
+ * gaps and its torque is the sum over both, so both are counted. The annulus is the active one —
+ * the radial span the coils and poles share — not the outer rotor diameter.
+ *
+ * Real machines: a good air-cooled permanent-magnet machine reaches 20-40 kPa, a liquid-cooled
+ * YASA-class one 60-100 kPa, and 100 kPa is 14.5 psi. That coincidence is not deep — it is the
+ * scale set by B ~ 1 T against mu0, since B^2 / (2 mu0) is 400 kPa at 1 T and the tangential
+ * component is a fraction of that — but it makes atmospheric pressure a handy yardstick.
+ */
+export function airgapShear(sol) {
+  const p = sol.job.p, m = sol.m;
+  const gaps = m.rotors ? m.rotors.filter(r => r.torque !== null).length : 0;
+  const ri = Math.min(p.ri, p.ro) * 1e-3, ro = Math.max(p.ri, p.ro) * 1e-3;
+  // The r-weighted area, in m^3: area times lever arm, which is what the traction acts through.
+  const lever_m3 = gaps * (2 * Math.PI / 3) * (ro * ro * ro - ri * ri * ri);
+  const T = m.torque;
+  if (T === null || lever_m3 <= 0) return { kPa: null, psi: null, area_mm2: null, gaps };
+  const Pa = T / lever_m3;
+  return {
+    kPa: Pa / 1e3,
+    psi: Pa * PSI_PER_PA,
+    // The plain swept area of all working gaps, for reference; the traction is not divided by it.
+    area_mm2: gaps * Math.PI * (p.ro * p.ro - p.ri * p.ri),
+    gaps
   };
 }
 

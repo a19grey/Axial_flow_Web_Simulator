@@ -277,6 +277,25 @@ async function gpuChecks(page, quick) {
      `${dual.mesh.resolution.airGap.toFixed(1)} and ${dual.mesh.resolution.lowerAirGap.toFixed(1)} cells`);
   report.cases.dualRotor = dual;
 
+  /* Air-gap shear stress is torque made size-free, so the point of it is that it does not hand
+   * out credit for extra gap area. The dual-sided machine makes more torque than the single-sided
+   * one — two working gaps instead of one — but it gets there by trading the steel back plate for
+   * a second rotor, so its traction per unit of gap area must not go up. That is exactly the
+   * comparison raw torque cannot make. */
+  const single = need(await call("solve", sweepMesh)).results;
+  const sh = single.derived.perUnit, dh = dual.derived.perUnit;
+  const sp = normalizeSpec(sweepMesh).spec.design.stator;
+  const ri = sp.innerRadius_mm * 1e-3, ro = sp.outerRadius_mm * 1e-3;
+  const lever = g => g * (2 * Math.PI / 3) * (ro ** 3 - ri ** 3);
+  process.stderr.write(`     single ${sh.airgapShear_psi.toExponential(4)} psi over ${sh.workingGaps} gap  dual ${dh.airgapShear_psi.toExponential(4)} over ${dh.workingGaps}\n`);
+  ok("shear stress recovers the torque it came from",
+     rel(sh.airgapShear_kPa * 1e3 * lever(sh.workingGaps), single.torque_mNm / 1e3) < 1e-9);
+  ok("a psi is 6894.76 Pa", rel(sh.airgapShear_kPa * 1e3, sh.airgapShear_psi * 6894.757293168361) < 1e-12);
+  ok("the second gap is counted", dh.workingGaps === 2 && rel(dh.airgapShear_kPa * 1e3 * lever(2), dual.torque_mNm / 1e3) < 1e-9);
+  ok("and buying torque with gap area does not buy shear stress",
+     dual.torque_mNm > single.torque_mNm && dh.airgapShear_psi < sh.airgapShear_psi,
+     `torque ${single.torque_mNm.toFixed(5)} -> ${dual.torque_mNm.toFixed(5)} mN.m, shear ${sh.airgapShear_psi.toExponential(3)} -> ${dh.airgapShear_psi.toExponential(3)} psi`);
+
   /* ---- skew --------------------------------------------------------------------------------------
    * Not a check against a reference, but against the reason skew exists: it should cut torque
    * ripple and cost some mean torque. A skew implementation that did nothing would pass every
