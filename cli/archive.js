@@ -87,7 +87,7 @@ export class RunArchive {
     for (const line of lines) {
       let e;
       try { e = JSON.parse(line); } catch { dropped++; continue; }
-      this.byHash.set(e.hash, e);
+      this.byHash.set(RunArchive.key(e), e);
       this.seq = Math.max(this.seq, e.seq + 1);
       this.noteBest(e, false);
     }
@@ -109,7 +109,12 @@ export class RunArchive {
 
   log(s) { appendFileSync(this.logPath, s.endsWith("\n") ? s : s + "\n"); }
 
-  cached(hash) { return this.byHash.get(hash) || null; }
+  /* The cache key is the design's spec hash, optionally suffixed. The suffix exists for the one
+   * thing the spec hash does not cover: a scoring option that changes the answer without changing
+   * the spec, such as an explicitly declared copper-loss budget. Two studies with different budgets
+   * pointed at one directory would otherwise collide on a hash and read each other's scores. */
+  static key(e) { return e.key || e.hash; }
+  cached(key) { return this.byHash.get(key) || null; }
 
   /* One evaluation, recorded. The ledger line is a summary — small enough that ten thousand of them
    * still load in a browser in one fetch — and the full spec and results go beside it under their
@@ -117,7 +122,7 @@ export class RunArchive {
   record(entry, { spec = null, record = null } = {}) {
     const e = { seq: this.seq++, ts: Date.now(), ...entry };
     appendFileSync(this.ledgerPath, JSON.stringify(e) + "\n");
-    this.byHash.set(e.hash, e);
+    this.byHash.set(RunArchive.key(e), e);
     if (spec || record) {
       const p = join(this.designs, `${e.hash}.json`);
       if (!existsSync(p)) writeFileSync(p, JSON.stringify({ hash: e.hash, seq: e.seq, spec, record }) + "\n");

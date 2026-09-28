@@ -114,8 +114,13 @@ function makeEvaluator({ host, archive, study, stats, log }) {
     const tiered = atTier(spec, study, tier);
     const { spec: norm } = normalizeSpec(tiered);
     const hash = specHash(norm);
+    /* An explicitly declared loss budget changes the score without changing the spec, so it has to
+     * be part of the cache key or two studies sharing a directory would read each other's answers.
+     * A budget derived from the baseline needs no suffix: it is a function of the baseline, which
+     * the manifest already records, so one directory can only ever hold one of them. */
+    const key = study.objective.lossBudget_W === undefined ? hash : `${hash}@${study.objective.lossBudget_W}`;
 
-    const hit = archive.cached(hash);
+    const hit = archive.cached(key);
     if (hit) { stats.cacheHits++; return { ...hit, cached: true }; }
 
     /* Spec-only gates, run here rather than in the page: a trace narrower than the fab allows is
@@ -123,7 +128,8 @@ function makeEvaluator({ host, archive, study, stats, log }) {
     const pre = gateDesign(norm, null, study.objective);
     if (!pre.feasible) {
       stats.rejected++;
-      return archive.record({ hash, stage, tier, tag, vars, x, score: null, feasible: false,
+      return archive.record({ hash, key: key === hash ? undefined : key, stage, tier, tag, vars, x,
+                              score: null, feasible: false,
                               rejectedBefore: "solve", gates: pre.gates, metrics: null, cost: { solves: 0, elapsed_ms: 0 } });
     }
 
@@ -136,13 +142,14 @@ function makeEvaluator({ host, archive, study, stats, log }) {
       const message = r.ok ? r.value.error.message : r.error;
       stats.failed++;
       log(`  design ${hash} failed: ${message}`);
-      return archive.record({ hash, stage, tier, tag, vars, x, score: null, feasible: false,
+      return archive.record({ hash, key: key === hash ? undefined : key, stage, tier, tag, vars, x,
+                              score: null, feasible: false,
                               error: message, gates: null, metrics: null, cost: { solves: 0, elapsed_ms: wall } });
     }
 
     const d = r.value.value, rec = d.record;
     const entry = {
-      hash, stage, tier, tag, vars, x,
+      hash, ...(key === hash ? {} : { key }), stage, tier, tag, vars, x,
       score: Number.isFinite(d.score) ? d.score : null,
       feasible: !!d.feasible,
       objective: d.objective,
@@ -186,7 +193,8 @@ const spearman = (a, b) => {
 async function runStudy(study, { archive, host, hours, budget, log }) {
   const stats = { evaluations: 0, cacheHits: 0, rejected: 0, failed: 0, wall_ms: 0 };
   const evaluate = makeEvaluator({ host, archive, study, stats, log });
-  const deadline = Number.isFinite(hours) ? Date.now() + hours * 3600e3 : Infinity;
+  const started = Date.now();
+  const deadline = Number.isFinite(hours) ? started + hours * 3600e3 : Infinity;
   const stop = () => Date.now() >= deadline || stats.evaluations >= budget;
 
   /* Which tier's score the run's "best" refers to: the one the search itself ran on. Mixing a
@@ -219,7 +227,8 @@ async function runStudy(study, { archive, host, hours, budget, log }) {
   for (const st of study.stages) {
     if (stop()) { log(`out of ${Date.now() >= deadline ? "time" : "budget"}; skipping the rest`); break; }
     const t0 = Date.now();
-    log(`\n--- ${st.kind} ---`);
+    const elapsedH = () => ((Date.now() - started) / 3600e3).toFixed(2);
+    log(`\n--- ${st.kind} --- (${elapsedH()} h in, ${stats.evaluations} evaluations)`);
     const tier = st.tier || "score";
     let out = {};
 
@@ -296,7 +305,7 @@ async function runStudy(study, { archive, host, hours, budget, log }) {
         if (stop()) break;
         const e = await scoreVector(pts[i], "scan", tier, { index: i, total: pts.length });
         scored.push({ x: pts[i], hash: e.hash, score: e.score });
-        if ((i + 1) % 10 === 0) log(`  ${i + 1}/${pts.length}  best so far ${fmt(archive.best?.score)}`);
+        if ((i + 1) % 10 === 0) log(`  ${i + 1}/${pts.length}  best on ${tier} ${fmt(archive.bestOn(tier)?.score)}`);
       }
       const feasible = scored.filter(s => s.score !== null);
       out = { points: scored.length, feasible: feasible.length,
