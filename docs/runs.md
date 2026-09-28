@@ -104,6 +104,18 @@ footprint, `"solve"` is a spec-only gate such as a trace narrower than the fab a
 `rejectedBefore` with an `error` field is a solve that failed. A rejection costs no solve time, which
 is why the cheap gates run first.
 
+**One writer per run directory.** `lock.json` names the process holding the run, and a second study
+pointed at the same directory is refused with that name. Append-only means two writers do not corrupt
+a line, but they do collide on sequence numbers — and because every searcher is deterministic given
+its seed, the second process evaluates the *same* points, so it doubles the history rather than
+covering more ground. A stale lock (a machine that slept, a `kill -9`) is taken over rather than being
+a wall in the morning: liveness is a signal-0 check on the same host and heartbeat age otherwise.
+
+If it happens anyway, `node cli/study.js repair <run-dir>` collapses the duplicates, renumbers, and
+rebuilds the storyboard, keeping the original as `ledger.jsonl.bak`. It refuses outright if two lines
+claim the same design with *different* scores, because then the duplication is not the accident it
+looks like and dropping either line would be destroying a measurement rather than tidying one.
+
 **Scores are comparable within a tier and not across tiers.** A screening mesh and a confirm mesh are
 two different numbers about the same design, so the archive tracks a best *per tier* and
 `primaryTier` in the manifest says which one the run's headline best refers to. The `rankcheck` stage

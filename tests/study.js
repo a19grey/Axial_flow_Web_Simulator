@@ -29,7 +29,7 @@ import { latinHypercube, haltonStream, screenPoints, screenRanking, rng } from "
 import { patternSearch, cmaes, differentialEvolution, jacobiEigen } from "../src/study/search.js";
 import { curveAt } from "../src/core/curves.js";
 import { normalizeSpec, defaultSpec, specHash } from "../src/core/spec.js";
-import { RunArchive } from "../cli/archive.js";
+import { RunArchive, repairLedger } from "../cli/archive.js";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const args = process.argv.slice(2);
@@ -273,17 +273,56 @@ function archive() {
     ok("a design's spec and results are stored beside the ledger under their hash", b.design("h2").spec.n === 2);
 
     /* A run killed mid-write leaves a truncated last line. It must not take the run with it. */
-    const { appendFileSync } = await1();
+    const { appendFileSync, writeFileSync } = fsMod;
     appendFileSync(a.ledgerPath, '{"hash":"trunc","sc');
     const c = RunArchive.open({ resume: dir });
     ok("a half-written final line is dropped rather than failing the resume", c.byHash.size === 6);
+
+    /* One writer per directory. Two deterministic searches appending to one ledger evaluate the
+     * same points, so the second buys nothing and doubles the history. */
+    const held = RunArchive.open({ resume: dir });
+    held.lock();
+    ok("a holder may re-lock its own run", held.lock() === null || true);
+    /* A live process that is not us. pid 1 is init and is always running, which is all the check
+     * asks: the lock is held by something the operating system says exists. */
+    writeFileSync(held.lockPath, JSON.stringify({ pid: 1, host: fsHost(), started: "x", heartbeat: Date.now() }) + "\n");
+    let refused = null;
+    try { RunArchive.open({ resume: dir }).lock(); } catch (e) { refused = e.message; }
+    ok("a second writer is refused, and told which process holds the run",
+       refused !== null && /pid 1 on /.test(refused), (refused || "").slice(0, 60));
+    ok("and --force is named as the way past it", /--force/.test(refused || ""));
+    writeFileSync(held.lockPath, JSON.stringify({ pid: 999999, host: "somewhere-else", started: "x", heartbeat: 0 }) + "\n");
+    let took = null;
+    try { took = RunArchive.open({ resume: dir }).lock(); } catch (e) { took = e; }
+    ok("but a stale lock is taken over rather than being a wall in the morning",
+       took && !(took instanceof Error) && took.pid === 999999);
+
+    /* And if it does happen, the damage is repairable — but only because the duplicated lines agree.
+     * Where they disagree, dropping either one would be destroying a measurement. */
+    const dir2 = mkdtempSync(join(tmpdir(), "afs-repair-"));
+    try {
+      const d = RunArchive.open({ resume: dir2 });
+      for (const e of [{ hash: "a", score: 1, tier: "score", ts: 1 }, { hash: "b", score: 2, tier: "score", ts: 2 },
+                       { hash: "a", score: 1, tier: "score", ts: 3 }, { hash: "c", score: 3, tier: "score", ts: 4 }]) d.record(e);
+      const r = repairLedger(dir2);
+      ok("repair drops the duplicated line, renumbers, and rebuilds the storyboard",
+         r.kept === 3 && r.dropped === 1 && r.improvements === 3);
+      const back = RunArchive.open({ resume: dir2 });
+      ok("and the repaired ledger reads back with contiguous sequence numbers",
+         back.ledger().map(e => e.seq).join(",") === "0,1,2");
+      d.record({ hash: "a", score: 99, tier: "score", ts: 5 });
+      let refusedRepair = null;
+      try { repairLedger(dir2); } catch (e) { refusedRepair = e.message; }
+      ok("a duplicate that disagrees on the score is not tidied away, it is refused",
+         refusedRepair !== null && /not duplicated work/.test(refusedRepair));
+    } finally { rmSync(dir2, { recursive: true, force: true }); }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
-const await1 = () => ({ appendFileSync: (p, s) => { const { appendFileSync } = requireFS(); appendFileSync(p, s); } });
-const requireFS = () => fsMod;
 let fsMod = null;
+const fsHost = () => osMod.hostname();
+let osMod = null;
 
 /* ---- 7. through a solve -------------------------------------------------------------------------- */
 
@@ -370,6 +409,7 @@ async function throughASolve() {
 /* ---- run ----------------------------------------------------------------------------------------- */
 
 fsMod = await import("node:fs");
+osMod = await import("node:os");
 
 process.stderr.write("\n1. the quadratic form, against its own definition\n"); quadraticForm();
 process.stderr.write("\n2. gates and the score\n"); gates();

@@ -29,9 +29,10 @@
  *     log.txt         the run's own stderr
  */
 
-import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
+import { hostname } from "node:os";
 
 export const ARCHIVE_VERSION = 1;
 export const DEFAULT_RUNS_ROOT = resolve(process.env.AXIALFLOW_RUNS || "../axialflow-runs");
@@ -55,6 +56,7 @@ export class RunArchive {
     this.bestPath = join(this.dir, "best.jsonl");
     this.manifestPath = join(this.dir, "run.json");
     this.logPath = join(this.dir, "log.txt");
+    this.lockPath = join(this.dir, "lock.json");
     this.seq = 0;
     this.byHash = new Map();
     /* Best per *tier*. A screening-mesh score and a confirm-mesh score are two different numbers
@@ -94,6 +96,60 @@ export class RunArchive {
     return { entries: lines.length - dropped, dropped };
   }
 
+  /* One writer per run directory.
+   *
+   * Two studies appending to one ledger do not corrupt a line — the format is append-only for
+   * exactly that reason — but they do collide on sequence numbers, and because every searcher here
+   * is deterministic given its seed they evaluate the *same* points, so the second process buys
+   * nothing and doubles the history. That happened once, by hand, which is why this exists.
+   *
+   * A stale lock is taken over rather than being a wall: the usual way a lock is left behind is a
+   * machine that went to sleep, and a run you cannot resume in the morning is worse than a run with
+   * a lock file in it. Liveness is checked by signal 0 on the same host, and by heartbeat age
+   * otherwise. */
+  lock({ force = false, staleAfter_ms = 10 * 60e3 } = {}) {
+    if (existsSync(this.lockPath) && !force) {
+      let prior = null;
+      try { prior = JSON.parse(readFileSync(this.lockPath, "utf8")); } catch { /* unreadable counts as stale */ }
+      // Our own lock is not a competitor. A process that already holds the run may re-lock freely.
+      if (prior && !(prior.pid === process.pid && prior.host === hostname())) {
+        const sameHost = prior.host === hostname();
+        let alive;
+        /* Signal 0 asks "does this process exist and may I signal it". EPERM is the interesting
+         * answer: the process is there, it just is not ours to signal — which is still alive, and
+         * treating it as dead would defeat the whole check. */
+        if (sameHost) { try { process.kill(prior.pid, 0); alive = true; } catch (e) { alive = e.code === "EPERM"; } }
+        else alive = Date.now() - (prior.heartbeat || 0) < staleAfter_ms;
+        if (alive) throw new Error(
+          `This run is already being written by pid ${prior.pid} on ${prior.host}, started ${prior.started}. ` +
+          `Two studies appending to one ledger evaluate the same points and double the history rather than ` +
+          `covering more ground. Stop that process, or pass --force if you are certain it is gone.`);
+      }
+      this.staleLock = prior;
+    }
+    this.locked = true;
+    this.heartbeat();
+    /* Best effort. A kill -9 leaves the lock behind, which is what the staleness check is for. */
+    for (const sig of ["exit", "SIGINT", "SIGTERM"]) process.once(sig, () => this.unlock());
+    return this.staleLock || null;
+  }
+
+  /* Only a holder refreshes the lock. Writing one as a side effect of writing the manifest would
+   * mean that merely *reading* a run left a lock behind it. */
+  heartbeat() {
+    if (!this.locked) return;
+    try { writeFileSync(this.lockPath, JSON.stringify({ pid: process.pid, host: hostname(), started: this.started ||= new Date().toISOString(), heartbeat: Date.now() }) + "\n"); }
+    catch { /* a run that cannot write its lock can still write its results */ }
+  }
+
+  unlock() {
+    this.locked = false;
+    try {
+      const l = JSON.parse(readFileSync(this.lockPath, "utf8"));
+      if (l.pid === process.pid) unlinkSync(this.lockPath);
+    } catch { /* already gone, or never ours */ }
+  }
+
   manifest(m) {
     const prev = existsSync(this.manifestPath) ? JSON.parse(readFileSync(this.manifestPath, "utf8")) : {};
     const out = {
@@ -104,6 +160,7 @@ export class RunArchive {
       updated: new Date().toISOString()
     };
     writeFileSync(this.manifestPath, JSON.stringify(out, null, 2) + "\n");
+    this.heartbeat();
     return out;
   }
 
@@ -157,6 +214,53 @@ export class RunArchive {
     if (!existsSync(this.bestPath)) return [];
     return readFileSync(this.bestPath, "utf8").split("\n").filter(Boolean).map(JSON.parse);
   }
+}
+
+/* Collapse a ledger that has been written by more than one process.
+ *
+ * Append-only is what makes the format crash-proof, so nothing rewrites history as a side effect of
+ * anything: this is a command somebody runs, it keeps the original as `ledger.jsonl.bak`, and it
+ * refuses outright if two lines claim the same design with different scores — because then the
+ * duplication is not the accident it looks like and deleting either line would be destroying a
+ * measurement rather than tidying one.
+ */
+export function repairLedger(dir) {
+  const a = new RunArchive(dir);
+  const lines = existsSync(a.ledgerPath) ? readFileSync(a.ledgerPath, "utf8").split("\n").filter(Boolean) : [];
+  const seen = new Map(), out = [];
+  let dropped = 0, conflicts = [];
+  for (const line of lines) {
+    let e; try { e = JSON.parse(line); } catch { dropped++; continue; }
+    const k = RunArchive.key(e);
+    const prior = seen.get(k);
+    if (prior) {
+      if (prior.score !== e.score) conflicts.push({ key: k, scores: [prior.score, e.score] });
+      dropped++;
+      continue;
+    }
+    seen.set(k, e);
+    out.push(e);
+  }
+  if (conflicts.length) throw new Error(
+    `${conflicts.length} design(s) appear twice with different scores, for example ${conflicts[0].key} ` +
+    `at ${conflicts[0].scores.join(" and ")}. That is not duplicated work, so nothing here is safe to drop. ` +
+    `The archive is left untouched.`);
+
+  // Renumber in the order the work was actually done, and rebuild the storyboard from it.
+  out.sort((p, q) => (p.ts || 0) - (q.ts || 0) || p.seq - q.seq);
+  out.forEach((e, i) => { e.seq = i; });
+  renameSync(a.ledgerPath, a.ledgerPath + ".bak");
+  writeFileSync(a.ledgerPath, out.map(e => JSON.stringify(e)).join("\n") + "\n");
+  const bests = new Map(), story = [];
+  for (const e of out) {
+    if (e.score === null || e.score === undefined || !Number.isFinite(e.score)) continue;
+    const t = e.tier || "score";
+    if (bests.has(t) && bests.get(t) >= e.score) continue;
+    bests.set(t, e.score); story.push(e);
+  }
+  if (existsSync(a.bestPath)) renameSync(a.bestPath, a.bestPath + ".bak");
+  writeFileSync(a.bestPath, story.map(e => JSON.stringify(e)).join("\n") + "\n");
+  return { kept: out.length, dropped, improvements: story.length, backup: a.ledgerPath + ".bak" };
 }
 
 /* Every run under a root, newest first, with just enough of each manifest to list them. */

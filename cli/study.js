@@ -41,7 +41,7 @@ import { latinHypercube, screenPoints, screenRanking } from "../src/study/sample
 import { SEARCHERS } from "../src/study/search.js";
 import { ladderStep } from "../src/study/shape.js";
 import { PageHost } from "./host.js";
-import { RunArchive, listRuns, runId, DEFAULT_RUNS_ROOT } from "./archive.js";
+import { RunArchive, listRuns, runId, repairLedger, DEFAULT_RUNS_ROOT } from "./archive.js";
 
 /* ---- study spec ------------------------------------------------------------------------------- */
 
@@ -524,6 +524,13 @@ const USAGE = `axial-flux study driver — long headless optimization runs
                        deliberately outside it — results are not repository contents
   --allow-software     proceed on a software WebGPU adapter (about a thousand times too slow)
   --dry-run            compile the study, print the variables and the plan, solve nothing
+  --force              write a run directory that another process holds a lock on
+
+  node cli/study.js repair <run-dir>
+
+  Collapse a ledger written by more than one process: drop the duplicated designs, renumber, and
+  rebuild the storyboard, keeping the original as ledger.jsonl.bak. Refuses if two lines claim the
+  same design with different scores, since then the duplication is not the accident it looks like.
 `;
 
 async function main() {
@@ -535,6 +542,14 @@ async function main() {
     if (!runs.length) process.stdout.write(`no runs under ${args["runs-root"] || DEFAULT_RUNS_ROOT}\n`);
     for (const r of runs) process.stdout.write(
       `${r.runId}  ${String(r.status || "?").padEnd(9)} ${String(r.evaluations ?? "-").padStart(6)} evals  best ${fmt(r.best)}  ${r.objective || ""}\n`);
+    return;
+  }
+  if (cmd === "repair") {
+    const dir = args._[1];
+    if (!dir) throw new Error("repair needs a run directory");
+    const r = repairLedger(dir);
+    process.stdout.write(`kept ${r.kept}, dropped ${r.dropped} duplicate line(s), ${r.improvements} improvements\n` +
+                         `the original is at ${r.backup}\n`);
     return;
   }
   if (cmd === "report") {
@@ -577,7 +592,9 @@ async function main() {
     : RunArchive.open({ root, id: runId(study.study), resume: args.resume || null });
   const dir = archive.dir;
 
+  const stale = archive.lock({ force: !!args.force });
   const log = s => { process.stderr.write(s + "\n"); archive.log(s); };
+  if (stale) log(`taking over a lock left behind by pid ${stale.pid} on ${stale.host}`);
   if (archive.seq > 0) log(`resuming ${dir}: ${archive.seq} evaluations already scored, ${archive.byHash.size} distinct designs`);
   log(`run directory: ${dir}`);
   log(`study "${study.study}"  objective ${study.objective.maximize}  seed ${study.seed}`);
@@ -613,6 +630,7 @@ async function main() {
     log(`\nstudy failed: ${failure}`);
   } finally {
     await host.close();
+    archive.unlock();
   }
   process.stdout.write(JSON.stringify({ runDir: dir, status, error: failure,
                                         best: archive.best ? { hash: archive.best.hash, score: archive.best.score, vars: archive.best.vars } : null }, null, 2) + "\n");
