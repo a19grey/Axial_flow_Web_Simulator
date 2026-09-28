@@ -650,9 +650,12 @@ function rasterizeCartesian(mesh, p, regions, volumes) {
               // Reduce the angle into the pitch about this copy's centre, so one polygon serves
               // every copy. Valid exactly while the footprint stays inside its own pitch, which is
               // what inspectSolid reports as `overlaps`.
+              // The polygon is drawn about zero, so the sample's angle is reduced into one pitch
+              // about this copy's centre and tested there. Same convention as the copies the
+              // cylindrical path clips: the phase is applied once, by the copy.
               const m = L.pitch;
               const d = ((th - L.phase) % m + m + m / 2) % m - m / 2;
-              if (!pointInPolygonRT(L.poly, r, L.phase + d)) continue;
+              if (!pointInPolygonRT(L.poly, r, d)) continue;
             } else if (L.reg.arc) {
               const m = L.pitch;
               let centre = L.reg.arc.phase, halfArc = L.halfArc;

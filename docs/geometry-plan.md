@@ -350,7 +350,17 @@ bit-for-bit identical torque (0.11897008024702582 mN·m either way). The general
 different physics.
 
 `src/cases/printed-rotor-demo.json` is the worked example — a hook-shaped footprint that doubles
-back, lofted to flare, fan and twist between the gap face and the yoke.
+back, lofted to flare, fan and twist between the gap face and the yoke. It peaks at 5.37 mN·m and
+ripples down to 2.76 over its 15° period, which is what a pole with that much swing does.
+
+One bug in this worth remembering, because the shape of it will recur: the rotor angle was applied
+twice on the traced path — once by the curve's frame and once by the copy that places it — so the
+solver put the poles at *2θ* while the renderer drew them at θ. Every test passed, because volume is
+invariant under rotation and every test sat at θ = 0. It was caught by looking at the field: the
+flux concentrated in the air *between* the drawn teeth. The fix is that the phase belongs to the
+copy and nothing else, and the regression is the bit-for-bit wedge comparison run at a non-zero
+rotor angle. Any new transform on this path needs a test at an angle where getting it wrong is
+visible.
 
 **`src/core/curves.js` — control-point curves and lofts (G1's parameterization, ahead of the IR).**
 Closed periodic B-splines in normalized wedge coordinates, exact refinement, exact polar area and lofted

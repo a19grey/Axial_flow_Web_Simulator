@@ -65,9 +65,14 @@ export function tracedSolid(fields, { count, phase = 0, curve, loft = null, flip
   return solid;
 }
 
-/* The frame a solid's normalized footprint is read in. */
-export const solidFrame = s => curveFrame({ r0: s.r0, r1: s.r1, centre: s.footprint.phase,
-                                            count: s.footprint.count });
+/* The frame a solid's normalized footprint is read in.
+ *
+ * Centred on zero, *not* on the footprint's phase. The phase belongs to the copy, not to the
+ * footprint: `footprintCopies()` places copy k at `phase + k * pitch`, so a frame that had already
+ * rotated the base polygon to `phase` would apply the rotor angle twice — which is precisely the
+ * bug this comment exists to stop coming back. One place owns the rotation, and it is the copy.
+ */
+export const solidFrame = s => curveFrame({ r0: s.r0, r1: s.r1, centre: 0, count: s.footprint.count });
 
 /* ---- the questions --------------------------------------------------------------------------- */
 

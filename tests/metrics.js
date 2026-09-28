@@ -187,13 +187,22 @@ function cpuChecks() {
   const LOFT = { scale: [1, 1.25, 0.85], twist: [0, 0.04] };
   const meshOpts = { activeCellsAcrossDiameter: 128, cellsAcrossDiameter: 128, cellsAcrossPoleArc: 24 };
 
-  const asWedge = buildMotor(specToParams(normalizeSpec({ mesh: { mode: "cylindrical", ...meshOpts } }).spec));
-  const asCurve = buildMotor(specToParams(normalizeSpec({
-    design: { rotor: { poleCurve: { controlPoints: [[0, -0.25], [1, -0.25], [1, 0.25], [0, 0.25]], degree: 1 } } },
-    mesh: { mode: "cylindrical", ...meshOpts } }).spec));
-  let diff = 0;
-  for (let i = 0; i < asWedge.mu.length; i++) diff = Math.max(diff, Math.abs(asWedge.mu[i] - asCurve.mu[i]));
-  ok("the default arc traced as a curve rasterizes bit-for-bit", diff === 0, `worst mu difference ${diff}`);
+  const RECT = { controlPoints: [[0, -0.25], [1, -0.25], [1, 0.25], [0, 0.25]], degree: 1 };
+  /* At a rotor angle of zero a doubled rotation is invisible, and so is a dropped one. Both angles
+   * are checked: the phase belongs to the copy, and a frame that rotates the base polygon as well
+   * puts the poles at twice the rotor angle — a machine that solves plausibly, reports a sensible
+   * torque, and is not the machine that was drawn. */
+  for (const mode of ["cylindrical", "graded"]) for (const theta of [0, 24]) {
+    const wedgeJob = buildMotor(specToParams(normalizeSpec({
+      operatingPoint: { rotorAngle_deg: theta }, mesh: { mode, ...meshOpts } }).spec));
+    const curveJob = buildMotor(specToParams(normalizeSpec({
+      design: { rotor: { poleCurve: RECT } },
+      operatingPoint: { rotorAngle_deg: theta }, mesh: { mode, ...meshOpts } }).spec));
+    let diff = 0;
+    for (let i = 0; i < wedgeJob.mu.length; i++) diff = Math.max(diff, Math.abs(wedgeJob.mu[i] - curveJob.mu[i]));
+    ok(`${mode}: the default arc traced as a curve rasterizes bit-for-bit at ${theta} deg`,
+       diff === 0, `worst mu difference ${diff}`);
+  }
 
   const tracedRows = [];
   for (const loft of [null, LOFT]) for (const mode of ["cylindrical", "graded"]) {
@@ -212,7 +221,27 @@ function cpuChecks() {
        worst < (mode === "cylindrical" ? Math.max(1e-3, 2 * claimed) : TOL.rasterCartesian_pct),
        `${worst.toExponential(2)}%`);
   }
+  /* The same audit swept over rotor angle, on a *sector* mesh. This is the case where a copy of the
+   * footprint hangs over the edge of the modelled window and has to come back in through the other
+   * side; lose that sliver and the machine quietly has slightly less iron than it was drawn with.
+   * Running it at zero only — which is where every other geometry test sits — would not see it. */
+  const sweepErrs = [];
+  for (const theta of [0, 5, 11.25, 22.5, 33.75, 40]) {
+    const { spec } = normalizeSpec({ design: { stator: { poles: 8 }, rotor: { poleCurve: TRACED, poleLoft: LOFT } },
+                                     operatingPoint: { rotorAngle_deg: theta },
+                                     mesh: { mode: "cylindrical", sector: true, ...meshOpts } });
+    const job = buildMotor(specToParams(spec));
+    const regions = motorRegions(job.p);
+    const i = regions.findIndex(r => r.name === "rotorPoles");
+    sweepErrs.push((job.volumes[i] * job.mesh.sectors - regionVolume(regions[i])) / regionVolume(regions[i]) * 100);
+  }
+  const sweepWorst = Math.max(...sweepErrs.map(Math.abs));
+  ok("a traced pole keeps its volume at every rotor angle on a sector mesh", sweepWorst < 1e-2,
+     `worst ${sweepWorst.toExponential(2)}% over 6 angles`);
+  ok("and the error does not depend on the angle", Math.max(...sweepErrs) - Math.min(...sweepErrs) < 1e-6,
+     `spread ${(Math.max(...sweepErrs) - Math.min(...sweepErrs)).toExponential(1)}%`);
   report.cases.rasterizationTraced = tracedRows;
+  report.cases.rasterizationTracedBySweep = sweepErrs;
 
   /* The current-angle sweep solves on a 15° grid and then solves once more at the peak of a
    * sin 2γ fit, so the fit has to find a peak the grid does not contain. Sampled from an exact
