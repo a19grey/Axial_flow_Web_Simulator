@@ -184,6 +184,11 @@ export class RunArchive {
       const p = join(this.designs, `${e.hash}.json`);
       if (!existsSync(p)) writeFileSync(p, JSON.stringify({ hash: e.hash, seq: e.seq, spec, record }) + "\n");
     }
+    /* The heartbeat rides along with the evaluation rather than only with the manifest. A refine
+     * stage can run for two hours without a stage boundary, and this archive root may well be a
+     * synced folder, where another machine's staleness check has nothing but the heartbeat to go on.
+     * It is a 120-byte write next to a solve. */
+    this.heartbeat();
     this.noteBest(e, true);
     return e;
   }
