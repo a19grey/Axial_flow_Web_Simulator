@@ -201,7 +201,11 @@ export function loftSchedule(spec = {}) {
   const ch = k => (spec[k] === undefined || spec[k] === null ? null : (Array.isArray(spec[k]) ? spec[k].map(Number) : [Number(spec[k])]));
   const sc = ch("scale") ?? [1], wd = ch("widen") ?? [1], tw = ch("twist") ?? [0], sh = ch("shift") ?? [0];
   const pivot = Number.isFinite(+spec.pivot) ? +spec.pivot : 0.5;
-  const constant = [sc, wd, tw, sh].every(c => c.length === 1) && sc[0] === 1 && wd[0] === 1 && tw[0] === 0 && sh[0] === 0;
+  /* Neutral means neutral whatever the degree: [1, 1, 1] is the same schedule as 1, and a design
+   * vector parked at the middle of its loft bounds should cost nothing rather than pay for
+   * arithmetic that does not move anything. */
+  const flat = (c, v) => c.every(x => x === v);
+  const constant = flat(sc, 1) && flat(wd, 1) && flat(tw, 0) && flat(sh, 0);
   const degree = Math.max(bezierDegree(sc), bezierDegree(wd), bezierDegree(tw), bezierDegree(sh));
   return { sc, wd, tw, sh, pivot, constant, degree };
 }

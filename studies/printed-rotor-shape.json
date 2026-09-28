@@ -1,0 +1,59 @@
+{
+  "study": "printed-rotor-shape",
+  "notes": "What shape should a 3D-printed rotor pole be? The footprint is a two-chain control curve in normalized wedge coordinates and the sweep from gap face to yoke is a short Bezier per channel, so the search can reach shapes no arc and no moulding process can draw - a pole that flares, waists, twists or doubles back. Scored on mean air-gap shear stress at the baseline's own copper loss, so every variant is a statement about equal heat rather than equal amps, and shear rather than torque so a bigger rotor does not win for being bigger. The realistic expectation is that the shape is worth a few percent; the point is that the space is reachable and the measurement is honest either way.",
+  "baseline": "../src/cases/printed-rotor-demo.json",
+  "seed": 20260927,
+
+  "objective": {
+    "maximize": "shear_kPa",
+    "maxSurfaceSpread_pct": 10,
+    "maxSuperpositionError_pct": 1,
+    "process": {
+      "minTraceWidth_mm": 0.15,
+      "minTraceSpacing_mm": 0.15,
+      "layerOptions": [2, 4, 6, 8],
+      "minPrintedFeature_mm": 0.8,
+      "minPrintedWall_mm": 1.2,
+      "minAirGap_mm": 0.8
+    }
+  },
+
+  "tiers": {
+    "screen": { "mesh": { "activeCellsAcrossDiameter": 96, "cellsAcrossAirGap": 5, "cellsAcrossPoleArc": 48, "cellsAcrossPoleHeight": 3 } },
+    "score": {},
+    "confirm": { "mesh": { "activeCellsAcrossDiameter": 200, "cellsAcrossAirGap": 10, "cellsAcrossPoleArc": 128, "cellsAcrossPoleHeight": 6 } }
+  },
+
+  "variables": [
+    { "name": "riOverRo", "min": 0.35, "max": 0.70, "init": 0.423,
+      "writes": [{ "path": "design.stator.innerRadius_mm", "expr": "riOverRo * ro" }] },
+    { "name": "gapOverRo", "min": 0.025, "max": 0.075, "init": 0.0385,
+      "writes": [{ "path": "design.rotor.airGap_mm", "expr": "gapOverRo * ro" }] },
+    { "name": "poleHeightOverGap", "min": 1.0, "max": 4.5, "init": 2.5,
+      "writes": [{ "path": "design.rotor.poleHeight_mm", "expr": "poleHeightOverGap * gapOverRo * ro" }] },
+    { "name": "yokeOverRo", "min": 0.05, "max": 0.14, "init": 0.0769,
+      "writes": [{ "path": "design.rotor.yokeThickness_mm", "expr": "yokeOverRo * ro" }] },
+
+    { "kind": "footprint", "name": "pole", "stations": 4, "maxV": 0.46,
+      "u0": 0.05, "u1": 0.95, "chordTolerance_mm": 0.004, "init": 0.26 },
+
+    { "kind": "loft", "name": "sweep", "pivot": 0.5,
+      "channels": { "scale": 3, "widen": 2, "twist": 2 } }
+  ],
+
+  "stages": [
+    { "kind": "baseline", "tier": "score" },
+    { "kind": "noise", "tier": "screen", "repeats": 2, "refinements": [1, 1.4, 2] },
+    { "kind": "screen", "tier": "screen", "fraction": 0.3, "drop": false },
+    { "kind": "scan", "tier": "screen", "points": 400 },
+    { "kind": "rankcheck", "tier": "screen", "against": "score", "count": 40 },
+    { "kind": "refine", "tier": "score", "algorithm": "cmaes", "budget": 900, "restarts": 4, "sigma0": 0.22 },
+    { "kind": "ladder", "tier": "score", "rungs": [
+      { "algorithm": "cmaes", "budget": 2200, "sigma0": 0.10 },
+      { "algorithm": "cmaes", "budget": 2600, "sigma0": 0.06 }
+    ] },
+    { "kind": "confirm", "tier": "confirm", "count": 6 }
+  ],
+
+  "budget": { "hours": 8, "evaluations": 20000 }
+}

@@ -9,6 +9,7 @@
  */
 
 import * as api from "./core/api.js";
+import * as study from "./study/api.js";
 
 const AFS = {
   version: api.API_VERSION,
@@ -26,6 +27,9 @@ const AFS = {
   cases: () => Object.entries(api.VALIDATION_CASES).map(([name, c]) => ({ name, title: c.title, reference: c.reference })),
 
   solve: (spec, opts) => call(() => api.solve(spec, withProgress(opts))),
+  /* One design, scored: its own best operating point, its gates, and one number. The entry point a
+   * study makes thousands of calls to; see src/study/api.js. */
+  score: (spec, opts) => call(() => study.score(spec, withProgress(opts))),
   sweep: (spec, sweepSpec, opts) => call(() => api.sweep(spec, sweepSpec, withProgress(opts))),
   validate: (which, spec, opts) => call(() => api.validate(which, spec, withProgress(opts))),
   convergence: (spec, opts) => call(() => api.convergence(spec, withProgress(opts))),

@@ -235,6 +235,17 @@ export function hookProjectUI() {
   };
   hookPresets();
   renderLibrary();
+  /* A design handed over from the run viewer. runs.html cannot solve anything — it draws outlines
+   * from specs and never touches the GPU — so "open in the tool" parks the spec in sessionStorage
+   * and opens this page, which picks it up here and solves it like any other project. The key is
+   * cleared on read, so a reload is a reload and not a second import. */
+  try {
+    const handoff = sessionStorage.getItem("afs-import-spec");
+    if (handoff) {
+      sessionStorage.removeItem("afs-import-spec");
+      applyProject(JSON.parse(handoff)).catch(e => setStatus(e.message, true));
+    }
+  } catch { /* a locked-down storage is not a reason to fail loading the page */ }
   getDownloads().then(dl => {
     for (const id of ["#projSaveFile", "#projExport"]) { $(id).disabled = !dl; $(id).hidden = !dl; }
     $("#dlNote").hidden = !!dl;

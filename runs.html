@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Optimization runs — axial-flux simulator</title>
+<!--
+  A reader for study archives. The runs themselves live outside this repository (see docs/runs.md);
+  `npm start` mounts whatever directory holds them at /runs/, and everything below is fetch and a
+  2-D canvas. No solve, no WebGPU, no build step — so a night's search scrubs at video rate and the
+  same page can be driven headless by cli/frames.js to render a frame sequence.
+-->
+<style>
+:root{
+  --bg:#E8ECF1; --panel:#F7F9FB; --ink:#17202B; --muted:#586676; --line:#C8D0DA;
+  --gpu:#2F55C9; --good:#237A4B; --warn:#B3261E;
+  --pa:#D0453A; --pb:#2E9E5B; --pc:#3569D6; --radius:6px;
+  font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#11151B; --panel:#1A2028; --ink:#E3E8EE; --muted:#93A1B2; --line:#2D3643;
+  --gpu:#86A2FF; --good:#5CC28C; --warn:#FF8A80; --pa:#FF7A6E; --pb:#5CD08F; --pc:#7FA4FF;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.45}
+header{padding:16px 20px 10px;border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap}
+h1{font-size:19px;margin:0;font-weight:600;letter-spacing:-.01em}
+h1 small{font-weight:400;color:var(--muted);font-size:13px;margin-left:8px}
+main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16px 20px 40px;align-items:start}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px}
+canvas{display:block;width:100%;background:transparent}
+#plan{height:min(52vh,520px)}
+#loft{height:150px}
+#trace{height:130px}
+.stage{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px}
+.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
+button,select,input[type=number]{font:inherit;font-size:13px;color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:4px;padding:5px 9px;cursor:pointer}
+button.primary{background:var(--gpu);border-color:var(--gpu);color:#fff}
+input[type=range]{flex:1;min-width:160px}
+#counter{font:12px/1 ui-monospace,monospace;color:var(--muted);min-width:78px;text-align:right}
+#headline{font-size:15px;margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#headline strong{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums}
+.unit{color:var(--muted);font-size:13px}
+.chip{font-size:11px;border:1px solid var(--line);border-radius:999px;padding:2px 8px;color:var(--muted)}
+.chip.good{color:var(--good);border-color:var(--good)}
+.chip.bad{color:var(--warn);border-color:var(--warn)}
+dl{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;margin:0;font-size:13px}
+dt{color:var(--muted)}
+dd{margin:0;font-variant-numeric:tabular-nums;text-align:right}
+h4{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:14px 0 4px}
+table.vars{width:100%;border-collapse:collapse;font:12px/1.5 ui-monospace,monospace}
+table.vars th{text-align:left;font-weight:400;color:var(--muted);padding:1px 0}
+table.vars td{text-align:right;font-variant-numeric:tabular-nums}
+.gates{margin-top:10px;font-size:12px}
+.good{color:var(--good)} .bad{color:var(--warn)} .warn{color:var(--warn);opacity:.85}
+#status{font-size:13px;color:var(--muted);min-height:18px}
+footer{padding:0 20px 30px;color:var(--muted);font-size:13px;max-width:96ch}
+code{font:12px ui-monospace,monospace;background:var(--bg);padding:1px 4px;border-radius:3px}
+/* ?frames=1 strips the chrome and leaves the frame: the shape on the left, the numbers that make it
+   evidence on the right. The metrics panel stays, because a movie of shapes with no numbers is a
+   screensaver. */
+body.frames header,body.frames footer,body.frames .controls,body.frames #trace{display:none}
+body.frames main{padding:14px;gap:14px;height:100vh;align-items:stretch}
+body.frames .panel{display:flex;flex-direction:column}
+body.frames .stage{flex:1;grid-template-columns:minmax(0,1fr) 260px;grid-template-rows:minmax(0,1fr);min-height:0}
+body.frames #plan{height:100%;min-height:0}
+body.frames #loft{height:170px}
+body.frames aside{overflow:hidden}
+/* Forty control-point values are not something anybody reads off a moving picture. */
+body.frames .vecblock{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>Optimization runs <small>archives are read from <span id="root">…</span></small></h1>
+  <select id="runs" style="min-width:min(46ch,60vw)"></select>
+  <button id="reload">reload</button>
+  <span id="status"></span>
+</header>
+
+<main>
+  <section class="panel">
+    <div id="headline"></div>
+    <div class="stage">
+      <canvas id="plan" title="looking down the shaft"></canvas>
+      <div>
+        <canvas id="loft" title="the pole's radial extent against height"></canvas>
+        <canvas id="trace" title="every scored evaluation on this tier"></canvas>
+      </div>
+    </div>
+    <div class="controls">
+      <button id="prev">←</button><button id="next">→</button>
+      <button id="play">play</button>
+      <input id="scrub" type="range" min="0" max="0" value="0">
+      <span id="counter">0 / 0</span>
+      <label style="color:var(--muted);font-size:12px">fps <input id="fps" type="number" value="6" min="1" max="60" style="width:56px"></label>
+      <select id="mode" title="which designs to flip through">
+        <option value="best">improvements only</option>
+        <option value="feasible">every scored design</option>
+        <option value="all">everything, rejections included</option>
+      </select>
+      <select id="tier" title="evaluation tier"></select>
+      <button id="open" class="primary">open in the tool</button>
+      <button id="download">save spec</button>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <h4>run</h4>
+    <dl id="runmeta"></dl>
+    <h4>this design</h4>
+    <div id="vars"></div>
+  </aside>
+</main>
+
+<footer>
+  <p>Arrow keys step, space plays. <b>Improvements only</b> is the storyboard — one design per time the
+  score got better, in order — and is what <code>cli/frames.js</code> renders into a frame sequence:
+  <code>node cli/frames.js &lt;run-dir&gt; --fps 6</code>, then the <code>ffmpeg</code> line it prints.
+  Nothing on this page solves anything; each outline is drawn from the design's own spec through the
+  same curve code the rasterizer used. To see the fields, open a design in the tool.</p>
+</footer>
+
+<script type="module" src="./src/runview/app.js"></script>
+</body>
+</html>

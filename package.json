@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node cli/serve.js",
     "test": "node tests/run-tests.js",
-    "test:quick": "node tests/run-tests.js --only analytic && node tests/metrics.js --cpu-only && node tests/run-tests.js --only ui",
+    "test:quick": "node tests/run-tests.js --only analytic && node tests/study.js --cpu-only && node tests/metrics.js --cpu-only && node tests/run-tests.js --only ui",
     "test:analytic": "node tests/run-tests.js --only analytic",
     "test:reference": "node tests/run-tests.js --only reference",
     "test:ui": "node tests/run-tests.js --only ui",
@@ -19,7 +19,11 @@
     "plan": "node cli/run.js plan",
     "capabilities": "node cli/run.js capabilities",
     "test:metrics": "node tests/run-tests.js --only metrics",
-    "test:geometry": "node tests/run-tests.js --only geometry"
+    "test:geometry": "node tests/run-tests.js --only geometry",
+    "test:study": "node tests/run-tests.js --only study",
+    "study": "node cli/study.js run",
+    "frames": "node cli/frames.js",
+    "runs": "node cli/study.js list"
   },
   "devDependencies": {
     "playwright": "^1.49.0"

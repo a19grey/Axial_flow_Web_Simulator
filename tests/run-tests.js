@@ -10,6 +10,7 @@
  *   convergence mesh refinement, the graded/cylindrical cross-check, the 370 mm scale case
  *   metrics     closed forms, symmetries, and torque by two independent methods
  *   geometry    the geometry language: expressions, profiles, traced coils (no GPU)
+ *   study       scoring a design: the operating-point algebra, the gates, the shape ladder, the archive
  *
  * Exits non-zero if any suite fails, so CI can gate on it.
  */
@@ -26,7 +27,8 @@ const SUITES = [
   { name: "ui", cmd: ["tests/smoke-ui.js"], note: "the full page end to end" },
   { name: "convergence", cmd: ["tests/convergence.js", "--out", "tests/out/convergence.json"], note: "mesh refinement and the 370 mm scale case" },
   { name: "metrics", cmd: ["tests/metrics.js", "--out", "tests/out/metrics.json"], note: "derived metrics and the cross-checks between them" },
-  { name: "geometry", cmd: ["tests/geometry.js", "--out", "tests/out/geometry.json"], note: "the geometry language, CPU only" }
+  { name: "geometry", cmd: ["tests/geometry.js", "--out", "tests/out/geometry.json"], note: "the geometry language, CPU only" },
+  { name: "study", cmd: ["tests/study.js", "--out", "tests/out/study.json"], note: "scoring a design, and the search that uses the score" }
 ];
 
 function run(script, extra) {

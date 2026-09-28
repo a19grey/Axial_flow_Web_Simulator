@@ -146,6 +146,7 @@ Published by both pages. Every call takes plain JSON and returns plain JSON.
 | `AFS.inductance(spec)` | the 3×3 inductance matrix, Ld and Lq, and the reciprocity check — 3 solves |
 | `AFS.torqueVsAngle(spec, {count})` | one electrical period: mean torque, ripple, harmonics, core loss |
 | `AFS.energyCheck(spec)` | stored energy from the field against stored energy from the inductance matrix |
+| `AFS.score(spec, opts)` | one design, scored: the closed-form best current phase, the mean over the ripple period at a fixed copper-loss budget, and the gates — 4 or 10 solves |
 | `AFS.defaultSpec()` / `AFS.normalizeSpec(s)` | build and check a spec |
 
 `solve`, `sweep` and `validate` resolve to `{ok: true, value}` or `{ok: false, error}` rather than
@@ -448,11 +449,45 @@ antisymmetric between 45° and 135°, and the two stress surfaces agree.
 | `ui` | the real page: the solve it runs by itself on load, both validation buttons, project round-trip, v1 migration, model export, graded meshing, the current-angle sweep and its confirming solve at the fitted peak, view controls, and no console errors |
 | `convergence` | *(needs a GPU)* the answer stops moving under refinement; grading beats uniform per cell; a periodic sector reproduces the full turn exactly; cylindrical and Cartesian agree on a converged answer; the 370 mm case runs; a 14 M-cell solve returns a real answer rather than zeros |
 | `geometry` | *(no GPU)* the expression language: arithmetic and precedence against hand-computed values, a closed grammar that refuses assignment, member access and host objects, error messages that name the nearest identifier in scope and spell out a dependency cycle, scopes that resolve in any declaration order |
+| `study` | *(GPU for half of it)* the operating-point algebra against its own definition; no point on a 36000-point scan beating the closed-form current phase; the closed form matching a direct solve to 1.2e-3 %; three rotor angles giving the mean that twelve give, to 0.09 %; a design scoring identically bit for bit; **a refined footprint solving to the same score, so a rung of the shape ladder measures the machine and not the parameterization**; every uniform draw from the two-chain box being a valid footprint; CMA-ES beating pattern search on a correlated quadratic; and a run archive that resumes from a half-written line |
 | `metrics` | *(GPU for half of it)* loop self-inductance against its closed form; cylindrical cell volumes tiling an annulus exactly; rasterized region volumes against exact ones; the winding period derived rather than assumed; the sin 2γ fit recovering a peak the sweep grid does not contain; Maxwell stress against virtual work; reciprocity of the inductance matrix and its convergence; stored energy two ways; the two rotors of a dual-sided machine; skew trading ripple for torque |
 
 `tests/reference/axial-flux-3d-webgpu.html` is the original single-file build, kept so the
 regression is reproducible indefinitely. `tests/compare-reference.js` drives it through its own
 controls and compares against the same design solved through the module API.
+
+## Studies and optimization
+
+A single solve returns a torque at whatever rotor angle and current phase the spec happened to name.
+That is a property of the design *and* an arbitrary operating point, so it is not a score. `AFS.score`
+puts a design at its own best operating point first, and it costs nothing extra to do so: with linear
+materials the field is linear in the currents, so three solves at unit current give the torque as an
+exact quadratic form in the current vector, the optimal current phase is closed form, and the current
+amplitude that spends a fixed copper-loss budget is a square root. The default objective is **mean
+air-gap shear stress at the baseline's own copper loss** — shear rather than torque so a bigger rotor
+does not win for being bigger, at fixed loss so the comparison is about equal heat rather than equal
+amps, and the mean over the ripple period rather than the peak because a motor under load passes
+through every rotor angle.
+
+Long runs are driven by a script and leave an archive, not a transcript:
+
+    node cli/study.js run studies/printed-rotor-shape.json --hours 8
+    node cli/study.js run studies/printed-rotor-shape.json --dry-run
+    node cli/study.js list
+    node cli/frames.js <run-dir> --video
+
+The run directory lives **outside the repository** (`../axialflow-runs/` by default) because it is a
+measurement rather than source; the machinery and the study specs are in here so anyone can run their
+own. It resumes with `--resume` and needs no optimizer checkpoint: every sampler and searcher is
+deterministic given its seed, so the append-only ledger doubles as the evaluation cache.
+
+`npm start` mounts the archive at `/runs/` and `runs.html` flips through it — arrow keys step, space
+plays, and `cli/frames.js` drives the very same page headless to render a frame sequence. Nothing in
+the viewer solves: each outline is drawn from its design's own spec through the same curve code the
+rasterizer used, so a night of search scrubs at video rate.
+
+See **`docs/runs.md`** for the archive format and **`docs/optimization-plan.md`** for why the score is
+what it is.
 
 ## Visualization
 
@@ -487,6 +522,10 @@ torque and gap field side by side.
 - `docs/numerics.md` — every measured number: scale, convergence, accuracy per cell, why torque uses
   many surfaces, dispatch limits, and which suite runs where.
 - `docs/limitations.md` — what the solver cannot do, why, and what would lift each restriction.
+- `docs/runs.md` — the run-archive format: where results live, why not here, and how to review one or
+  render it to a movie.
+- `docs/optimization-plan.md` — what a design's score is, and how the design space gets searched.
+- `docs/geometry-plan.md` — the shape language: control-point footprints, lofts, and the solid IR.
 
 ## Limitations
 
@@ -515,9 +554,13 @@ See `docs/limitations.md` for the full statement. In short:
     src/cases/                     worked examples, shared by the page's dropdown and the CLI
     src/gpu/                       device, buffers, shaders, Biot-Savart, CG — no DOM
     src/render/                    3D view and the analytic meshes it shares with the exporter
+    src/study/                     scoring a design and searching the space — no DOM, runs in node too
+    src/runview/                   the run viewer: reads an archive, draws footprints, no GPU
     src/ui/                        controls, panels, plots, project, export, page wiring
     src/afs.js                     publishes window.AFS
-    cli/                           the headless driver
+    runs.html                      the run viewer's page
+    studies/                       study specs: variables, objective, gates, stages
+    cli/                           headless drivers: run.js one command, study.js a night, frames.js a movie
     tests/                         suites, the frozen reference build, golden files
     docs/                          physics, numerics, schema, limitations
 

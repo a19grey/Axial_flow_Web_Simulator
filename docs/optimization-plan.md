@@ -1,8 +1,22 @@
 # Scoring, peak-finding and searching the design space
 
-*Written 2026-09-25. Status: approved, not started — except the shape parameterization, which is
-landed as `src/core/curves.js`. Objective and gates chosen 2026-09-25; shape-vector ladder added
-2026-09-27.*
+*Written 2026-09-25. Objective and gates chosen 2026-09-25; shape-vector ladder added 2026-09-27.*
+
+*Status 2026-09-28: **phases A, B, C and D are landed**, along with the run harness and the reviewer
+the plan did not originally ask for. `src/study/` holds `operatingPoint.js`, `objectives.js`,
+`design.js`, `shape.js`, `sample.js`, `search.js` and `api.js`; `cli/study.js` drives a run of
+arbitrary length against an append-only archive outside the repository, `cli/archive.js` defines it,
+`runs.html` flips through it and `cli/frames.js` renders it to a frame sequence. `docs/runs.md` is the
+archive format. `tests/study.js` asserts every claim in the validation table below that does not need
+a multi-hour run.*
+
+*Measured on landing, on the 80 mm reluctance case: the closed-form torque matches a direct solve at
+its own chosen current phase to **1.2e-3 %**; the closed form's `gamma*` comes out at **45.06
+electrical degrees**, which is the textbook synchronous-reluctance answer nobody told it, and a
+36-point sweep peaks at the same place; three rotor angles give the mean that twelve give to
+**0.09 %**; the same design scores **bit-identically**; and a refined footprint solves to the **same
+score to 0.0 %**, which is the claim the whole ladder rests on. Phase E — the confirm-and-report stage
+— exists as a study stage and has not yet been run to the end on a real overnight study.*
 
 ## The problem, stated honestly
 
@@ -301,10 +315,18 @@ src/study/sample.js           Sobol / LHS
 src/study/search.js           pattern search, CMA-ES and differential evolution behind one interface
 src/study/shape.js            footprints and lofts as design vectors over curves.js: pack, unpack, bounds,
                               and the ladder step that re-enters a larger space at the same design
-src/study/cache.js            specHash-keyed evaluation cache, JSONL, resumable
-cli/run.js                    screen | scan | optimize | confirm, streaming JSONL, resumable
-docs/optimization.md          regenerated from the run reports, so published numbers cannot drift
+src/study/api.js              the one call a study makes per design: score = operating point + gates
+cli/archive.js                the run archive: append-only JSONL, resumable, outside the repository
+cli/study.js                  baseline | noise | screen | scan | rankcheck | refine | ladder | confirm
+cli/frames.js                 a run rendered to a frame sequence, and an ffmpeg line
+runs.html, src/runview/       flipping through a night of search; no solve, no GPU
+docs/runs.md                  the archive format, so a run is readable without this code
 ```
+
+The evaluation cache turned out not to need a file of its own. The ledger *is* the cache, keyed by
+spec hash, and because every sampler and searcher is deterministic given its seed a resumed run
+replays the same points and finds them already scored — so there is no optimizer state to checkpoint
+and nothing that can fall out of step with the results.
 
 Order of work: **A** operating-point evaluator and its tests → **B** score, noise floor and screening-mesh
 rank correlation → **C** design variables and the sensitivity screen → **D** scan and refine → **E** confirm
