@@ -125,6 +125,62 @@ intervals, and sampled only in θ. `plan()` reports, per solid, which path it to
 volume error against the closed form. The message when a shape drops off the exact path is a *note, not a
 warning*: it is a legitimate trade, the author just deserves to know they made it.
 
+### 2b. Control-point curves — the footprint as a design vector
+
+Paths and splines above are the *authoring* vocabulary: a human or an agent writes arcs, radials and
+fillets because that is how a shape is described in words. They are a poor *optimization* vocabulary,
+because the number of degrees of freedom changes with the shape and there is no box to sample from.
+
+So the footprint has a second, equivalent form — a **closed curve through control points**, ten to thirty
+of them — and this is the form the optimizer sees. Landed as `src/core/curves.js`. Four choices in it,
+each of which is the difference between a shape language that demos well and one that can be searched:
+
+- **Normalized wedge coordinates.** A control point is `[u, v]`: `u` is 0 at the feature's inner radius
+  and 1 at its outer, `v` is angle in units of the feature's *pitch*, so `v = ±0.5` is exactly where this
+  wedge would touch its neighbour. Every control point then lives in the *same* box, and any polygon
+  inside that box stays in its annulus and cannot collide with the next pole. The box does not by itself
+  make the outline *simple*, and the measurement is blunt about it: eight points drawn uniformly and taken
+  in the order drawn are a simple shape only 6 % of the time. `twoSidedCurve()` is the layout that closes
+  that gap — two radially monotone chains with non-overlapping angular ranges cannot cross, 100 % over the
+  same draws — and it is exactly the width/offset profile generalized, so today's machine sits inside it.
+- **Periodic cubic B-spline, not one high-degree Bezier.** Fifteen points on a single Bezier is a
+  degree-14 Bernstein basis: every point pulls on the whole curve, the basis is nearly linearly
+  dependent, and moving one design variable changes the shape everywhere. A closed uniform cubic
+  B-spline has the same control points and the same smoothness with support over four spans, so the
+  measured sensitivity of each variable means something. Degree 1 is available as the escape hatch for
+  hard corners, and `splineThrough()` interpolates when what the author has is a traced outline and
+  "go through these points" is what they meant.
+- **Refinement is exact.** `refine()` doubles the control points and returns *the same curve*, to the
+  last bit (Lane–Riesenfeld: duplicate, then average `degree` times). A four-point optimum is therefore
+  not a starting guess for the eight-point space, it is a *member* of it. This is the ladder that makes
+  the infinite space finite, and it is asserted pointwise in `tests/geometry.js` rather than assumed.
+- **Areas and volumes stay closed-form.** The engine's independent audit of its own rasterizer is
+  `regionVolume()`, computed without reference to the mesh. A spline footprint keeps it: the polar
+  Green's-theorem integral `A = ½ ∮ r² dθ` has a piecewise *polynomial* integrand, so a Gauss rule of
+  `⌈(3d+2)/2⌉` nodes is exact rather than converged, and the lofted volume is exact the same way.
+  Generality costs exactness in the rasterizer — a spline edge is not a coordinate surface — but it must
+  not cost us the yardstick we measure that error against.
+
+**The sweep is parameterized the same way.** A solid is a footprint plus a schedule of what happens to it
+between the two faces, one small Bezier per channel against normalized height:
+
+```json
+"loft": { "scale": [1, 1.35, 0.85], "widen": [1, 1.1, 1], "twist": [0, 0.05], "shift": [0], "pivot": 0.5 }
+```
+
+`scale` flares or pinches about the pivot radius, `widen` fans the shape angularly without growing it
+radially, `twist` is `poleSkew_deg` generalized, `shift` slides it radially. One value is a constant, two
+a ramp, three the quadratic flare-or-waist a printed pole actually wants — which is the whole point: a
+pole that bulges on the way up and closes at the top is a shape **only a printer makes**, and it is now
+six numbers. The overhang check falls out of the same schedule: the largest lateral displacement of a
+material point between adjacent heights, over the height step, is the local overhang angle.
+
+Validity is the hard part of generality, not expressiveness, so `inspectCurve()` answers — with no mesh
+and no solve — does it stay in its annulus, does it clear its neighbour, is it simple (a self-crossing
+outline is not a shape; it rasterizes with a hole and a mass that matches nothing), what area fraction
+does it cover, what volume does it sweep, and what is its worst overhang. That function is the
+optimizer's feasibility gate and the agent's fast loop, and it is the same code for both.
+
 ### 3. Solids — the third dimension
 
 ```json
@@ -270,6 +326,14 @@ three properties above:
 - the swept area is closed-form, so `regionVolume()` still audits the rasterizer — and does more work than
   before, since a free footprint is much easier to rasterize wrongly than an arc.
 
+**`src/core/curves.js` — control-point curves and lofts (G1's parameterization, ahead of the IR).**
+Closed periodic B-splines in normalized wedge coordinates, exact refinement, exact polar area and lofted
+volume, adaptive tessellation with a segment budget, self-intersection and overhang checks, bridges from
+the existing width/offset profiles, and the design-vector view the optimizer wants. Not yet wired into
+the rasterizer or the mesher: at the moment it is a complete, tested shape *language* with no solid
+behind it, which is deliberate — it is the piece G1 and the optimization plan both need, and it is
+checkable without either.
+
 `src/cases/yasa-shapes-demo.json` is the worked example: coils whose centre line swings more than a coil
 pitch across the radius, and comma-shaped rotor poles. Unprofiled designs are bit-for-bit unchanged, which
 `tests/geometry.js` asserts against a copy of the old coil builder and `tests/compare-reference.js`
@@ -300,7 +364,9 @@ bit-for-bit; per-solid rasterization error unchanged.
 ### G1 — Profiles, paths, solids
 
 *Partly landed: see "Landed so far" for the radial shape profiles, which cover the pole and coil footprints
-this section's examples needed. The traced-path work below is untouched.*
+this section's examples needed, and for `curves.js`, which is the control-point form of §2b in full. What
+remains is to put a solid behind them: the IR types, the rasterizer's sampled path, and the mesher's hard
+points.*
 
 Path segments, fillets, splines, mirror/offset/repeat, `subtract`, z-stations. Triangulator (ear clipping
 with hole bridging) so render and STL/OBJ follow arbitrary shapes — `meshes.js::rotorSolid` becomes one

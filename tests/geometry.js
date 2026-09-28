@@ -16,6 +16,10 @@ import { fileURLToPath } from "node:url";
 import { evalExpr, resolveScope, dependencies, parseExpr, field, ExprError } from "../src/core/expr.js";
 import { resolveShape, shapeAt, shapeOutline, shapeAreaFraction, shapeClearance, shapeSwing, DEG } from "../src/core/shapes.js";
 import { coilPolys, windingLayout } from "../src/core/geometry.js";
+import { closedCurve, curveAt, refine, curveArea, curveAreaFraction, curveFrame, splineThrough,
+         loftSchedule, loftAt, loftVolume, tessellate, selfIntersects, curveFromProfile, inspectCurve,
+         curveToVector, curveFromVector, curveBounds, bezierAt, CurveError,
+         twoSidedCurve, twoSidedFromVector, twoSidedBounds } from "../src/core/curves.js";
 import { normalizeSpec } from "../src/core/spec.js";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -309,6 +313,147 @@ function shapes() {
                           coilSwing_deg: shapeSwing(coil) / DEG };
 }
 
+/* ---- control-point curves -------------------------------------------------------------------- */
+
+/* The general footprint: a closed curve through control points, swept with its own schedule. Three
+ * claims in `curves.js` are load-bearing and all three are checked numerically here rather than
+ * argued for in a comment: refinement does not change the curve, the area and volume integrals are
+ * exact and not merely converged, and the two shape languages agree where they overlap. */
+function curves() {
+  process.stderr.write("\n7. control-point curves and lofts\n");
+
+  const ctrl = [[0.05, -0.18], [0.30, -0.30], [0.80, -0.22], [0.98, 0.0],
+                [0.80, 0.28], [0.30, 0.22], [0.05, 0.15]];
+  const frame = curveFrame({ r0: 15, r1: 40, count: 8 });
+
+  // Refinement is exact, which is what makes a coarse optimum a *member* of the finer design space
+  // rather than a guess at one. The refined curve at 2t must be the original at t, to rounding.
+  for (const degree of [1, 2, 3]) {
+    const a = closedCurve(ctrl, { degree }), b = refine(a);
+    let worst = 0;
+    for (let i = 0; i < 400; i++) {
+      const t = i / 400 * a.spans, p = curveAt(a, t), q = curveAt(b, 2 * t);
+      worst = Math.max(worst, Math.hypot(p.u - q.u, p.v - q.v));
+    }
+    ok(`refining a degree-${degree} curve leaves it unchanged`, worst < 1e-14, worst.toExponential(2));
+    ok(`and doubles its control points`, b.spans === 2 * a.spans, `${a.spans} -> ${b.spans}`);
+  }
+
+  // Where the two shape languages overlap they must agree exactly, not nearly: a trapezoid traced as
+  // a degree-1 curve has the same swept area as the same trapezoid written as a width fraction.
+  const plain = resolveShape({ count: 8, fraction: 0.5 });
+  const asCurve = curveFromProfile(shapeAt, plain, { perSide: 2, degree: 1 });
+  ok("a traced trapezoid sweeps the area the wedge formula gives",
+     near(curveAreaFraction(asCurve, frame), shapeAreaFraction(plain, 15, 40), 1e-14));
+
+  const profiled = resolveShape({ count: 8, fraction: 0.5, skew: 10 * DEG,
+                                  profile: [{ atRadius: 0, widthFraction: 0.3 },
+                                            { atRadius: 0.5, widthFraction: 0.7 },
+                                            { atRadius: 1, widthFraction: 0.45 }] });
+  const traced = curveFromProfile(shapeAt, profiled, { perSide: 41, degree: 1 });
+  ok("and so does a traced kinked profile",
+     near(curveAreaFraction(traced, frame), shapeAreaFraction(profiled, 15, 40), 1e-7));
+
+  // The polar Green's-theorem integral is exact because the integrand is a polynomial. Checked
+  // against the area of a very fine polyline, which converges to it from below.
+  const c = closedCurve(ctrl);
+  const exact = curveArea(c, frame).area;
+  const poly = tessellate(c, frame, { tolerance_mm: 1e-4, maxPoints: 40000 }).points;
+  let shoelace = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    shoelace += a[0] * b[1] - b[0] * a[1];
+  }
+  ok("the closed-form area matches a finely tessellated one",
+     near(exact, Math.abs(0.5 * shoelace), 3e-5),
+     `${exact.toFixed(6)} mm^2, polyline short by ${((exact - Math.abs(0.5 * shoelace)) / exact * 1e6).toFixed(1)} ppm`);
+
+  // The lofted volume likewise: a prism is area x height exactly, and a flared-then-pinched sweep
+  // matches a brute-force integration over height.
+  const prism = loftSchedule({});
+  ok("a constant loft is a prism", near(loftVolume(c, frame, prism, 0, 3), exact * 3, 1e-14));
+  const loft = loftSchedule({ scale: [1, 1.35, 0.8], widen: [1, 1.1, 1], twist: [0, 0.06] });
+  const V = loftVolume(c, frame, loft, 0, 3);
+  let brute = 0, N = 4000;
+  for (let i = 0; i < N; i++) brute += curveArea(c, frame, loftAt(loft, (i + 0.5) / N)).area;
+  brute = brute / N * 3;
+  ok("a three-point flare integrates exactly in height", near(V, brute, 1e-7), `${V.toFixed(4)} mm^3`);
+  ok("a one-value channel is a constant and two is a ramp",
+     bezierAt([0.7], 0.3) === 0.7 && near(bezierAt([0, 1], 0.25), 0.25) && near(bezierAt([0, 0, 1], 0.5), 0.25));
+
+  // Authoring: an agent handed a list of coordinates means "go through these".
+  const through = splineThrough(ctrl);
+  let miss = 0;
+  for (let i = 0; i < ctrl.length; i++) {
+    const q = curveAt(through, i);
+    miss = Math.max(miss, Math.hypot(q.u - ctrl[i][0], q.v - ctrl[i][1]));
+  }
+  ok("splineThrough passes through its points", miss < 1e-12, miss.toExponential(2));
+
+  // Validity. A control polygon drawn at random sometimes crosses itself, and a crossed footprint is
+  // not a shape — it has to be caught before it is meshed, not explained afterwards.
+  const bowtie = closedCurve([[0.1, -0.2], [0.9, 0.2], [0.1, 0.2], [0.9, -0.2]], { degree: 1 });
+  ok("a self-crossing outline is caught",
+     selfIntersects(tessellate(bowtie, frame, {}).points) && !selfIntersects(poly));
+
+  const insp = inspectCurve(c, frame, { loft, z0: 0, z1: 3 });
+  ok("a legal footprint reports itself legal",
+     insp.simple && insp.insideAnnulus && insp.clearsNeighbour && insp.overhang_deg > 0);
+  const wide = inspectCurve(closedCurve([[0.2, -0.7], [0.9, 0], [0.2, 0.7]], { degree: 1 }), frame, {});
+  ok("a footprint wider than its pitch is flagged rather than meshed", !wide.clearsNeighbour,
+     `|v| max ${wide.maxAbsV.toFixed(2)}`);
+  const outside = inspectCurve(closedCurve([[-0.3, -0.2], [1.4, 0], [-0.3, 0.2]], { degree: 1 }), frame, {});
+  ok("and so is one that leaves its annulus", !outside.insideAnnulus);
+
+  // The optimizer's view: a curve is a vector in a box that is the same for every entry, and the
+  // round trip has to be lossless or a design cannot be reproduced from its own saved spec.
+  const vec = curveToVector(c);
+  const back = curveFromVector(vec, c);
+  ok("a curve round-trips through its design vector",
+     vec.length === 2 * c.spans && back.control.every((p, i) => p[0] === c.control[i][0] && p[1] === c.control[i][1]));
+  const fixed = curveToVector(c, { fixU: true });
+  ok("pinning the radial coordinates halves the dimension", fixed.length === c.spans);
+  ok("and the bounds are the normalized box", curveBounds(c).length === 2 * c.spans
+     && curveBounds(c)[1][0] === -0.5 && curveBounds(c)[1][1] === 0.5);
+
+  ok("too few control points is an error that says so",
+     threw(() => closedCurve([[0, 0], [1, 0]]))?.message.includes("at least 4"));
+  ok("a malformed control point is an error, not a NaN shape",
+     threw(() => closedCurve([[0, 0], [1, "x"], [0.5, 0.2], [0.2, 0]])) instanceof CurveError);
+
+  // The box is feasible; the *ordering* is not. Points taken in the order they were drawn cross
+  // themselves nearly always, which is why the low rung of the ladder uses the two-chain layout: two
+  // radially monotone chains with non-overlapping angular ranges cannot cross, so every draw in the
+  // box is a shape. Both rates are measured here rather than asserted, because the whole argument for
+  // searching a thirty-dimensional shape space rests on the second one.
+  const R = (a, b) => a + Math.random() * (b - a);
+  const rate = gen => {
+    let good = 0;
+    for (let i = 0; i < 300; i++) {
+      const c = gen();
+      if (!selfIntersects(tessellate(c, frame, { tolerance_mm: 0.1 }).points)) good++;
+    }
+    return good / 300;
+  };
+  const naive = rate(() => closedCurve(Array.from({ length: 8 }, () => [R(0.05, 0.95), R(-0.45, 0.45)])));
+  const layout = rate(() => twoSidedFromVector(twoSidedBounds(4, { maxV: 0.45 }).map(([lo, hi]) => R(lo, hi))));
+  ok("points taken in the order they were drawn mostly cross themselves",
+     naive < 0.25, `${(100 * naive).toFixed(0)} % simple`);
+  ok("the two-chain layout cannot draw a broken shape", layout === 1, `${(100 * layout).toFixed(0)} % simple`);
+
+  const tsq = twoSidedCurve([-0.2, -0.3, -0.25], [0.2, 0.3, 0.25]);
+  ok("a two-sided footprint is symmetric when its sides are",
+     near(curveArea(tsq, frame).area, curveArea(twoSidedCurve([-0.2, -0.3, -0.25], [0.2, 0.3, 0.25]), frame).area, 1e-15)
+     && tsq.spans === 6);
+  ok("and its vector round-trips", twoSidedFromVector([-0.2, -0.3, -0.25, 0.2, 0.3, 0.25]).control.length === 6);
+  ok("an odd-length vector is an error that says so",
+     threw(() => twoSidedFromVector([0.1, 0.2, 0.3]))?.message.includes("even"));
+
+  report.cases.curves = { area_mm2: exact, volume_mm3: V, overhang_deg: insp.overhang_deg,
+                          naiveSimpleRate: naive, layoutSimpleRate: layout,
+                          tessellationPoints: insp.points, areaFraction: insp.areaFraction };
+}
+
 /* ---- main ------------------------------------------------------------------------------------- */
 
 const args = process.argv.slice(2);
@@ -320,6 +465,7 @@ messages();
 scopes();
 reuse();
 shapes();
+curves();
 
 if (outFile) {
   await mkdir(dirname(resolve(ROOT, outFile)), { recursive: true });
