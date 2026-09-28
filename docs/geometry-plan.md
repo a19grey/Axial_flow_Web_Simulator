@@ -326,6 +326,32 @@ three properties above:
 - the swept area is closed-form, so `regionVolume()` still audits the rasterizer — and does more work than
   before, since a free footprint is much easier to rasterize wrongly than an arc.
 
+**`src/core/ir.js`, `src/core/raster.js` and the rotor path (G0 and G1, for the rotor).** The curve
+language now has a solid behind it. `motorRegions()` returns *solids* rather than four hard-coded
+sectors, and the pole is built two ways: a wedge, exactly as before, or a traced footprint from
+`design.rotor.poleCurve` swept by `design.rotor.poleLoft`. Everything downstream — the two
+rasterizers, the mesher's hard points, the mass breakdown, the volume audit, the 3D view and the STL
+export — asks the solid rather than knowing which part it is looking at.
+
+The result worth recording is that **generality did not cost exactness**. In normalized wedge
+coordinates the map to physical space is affine, so a traced footprint is a closed polygon in the
+(r, θ) plane — and cylindrical cells are axis-aligned rectangles in that same plane. So the cell
+fraction is a Sutherland-Hodgman clip and a Green's-theorem contour integral,
+`∫∫ r dr dθ = ∮ (r²/2) dθ`, which on an edge linear in (r, θ) is exactly
+`(Δθ/6)(r₁² + r₁r₂ + r₂²)`. No supersampling, no staircase. Measured: the traced pole's rasterized
+volume misses its closed form by 4.9e-3 %, and the tessellation *alone* accounts for 4.9e-3 % — the
+rasterizer contributes nothing. Tighten `chordTolerance_mm` and the error falls with it. A lofted
+solid's slab is integrated across its height with two-point Gauss rather than read at the slab
+centre, and the audit does not degrade.
+
+The regression contract is stronger than "within tolerance": the default arc, written as a
+four-point degree-1 footprint, produces a **bit-for-bit identical** permeability field and a
+bit-for-bit identical torque (0.11897008024702582 mN·m either way). The general path is not
+different physics.
+
+`src/cases/printed-rotor-demo.json` is the worked example — a hook-shaped footprint that doubles
+back, lofted to flare, fan and twist between the gap face and the yoke.
+
 **`src/core/curves.js` — control-point curves and lofts (G1's parameterization, ahead of the IR).**
 Closed periodic B-splines in normalized wedge coordinates, exact refinement, exact polar area and lofted
 volume, adaptive tessellation with a segment budget, self-intersection and overhang checks, bridges from
@@ -349,6 +375,11 @@ Each phase ends green — all five suites pass, presets reproduce — so the too
 
 ### G0 — IR and the port (no behaviour change)
 
+*Landed for the rotor; the stator's coils still take the old path. `ir.js` and the solid-based
+`motorRegions()` are in, both rasterizers read the IR, the mesher takes its radial hard points off
+it, and `plan()` reports per-solid provenance. Not yet done: `generators.js`, spec v3 with the
+`geometry`/`windings` blocks, and the z hard points moving off the fixed landmark list.*
+
 - `src/core/expr.js`: the safe expression evaluator + scope resolution + cycle detection.
 - `src/core/ir.js`: solid/profile/extrusion/coil types, normalization, and the exactness classifier.
 - `src/core/generators.js`: today's machine as a generator emitting IR from the v2 `design.*` fields.
@@ -371,6 +402,10 @@ points.*
 Path segments, fillets, splines, mirror/offset/repeat, `subtract`, z-stations. Triangulator (ear clipping
 with hole bridging) so render and STL/OBJ follow arbitrary shapes — `meshes.js::rotorSolid` becomes one
 case of the general path. Minimal `preview()` (we need it ourselves before G2).
+
+*Landed for the rotor: traced footprints, z-stations as a Bezier loft per channel, the triangulator
+(ear clipping) behind the 3D view and the STL export. Not yet: fillets, booleans (`subtract`), more
+than one footprint per machine, and `preview()`.*
 
 **Exit:** two things. A shape expressed two ways — as a `sector` and as an equivalent `path` — meshes to
 the same volume and solves to the same torque within the sampled-rasterization error bar, and that bar is

@@ -168,6 +168,7 @@ export function renderLibrary() {
 export const PRESETS = [
   { file: "pcb-reluctance-80mm.json", label: "PCB reluctance, 80 mm", blurb: "the default machine; solves in under a second" },
   { file: "yasa-shapes-demo.json", label: "Shape demo: skewed coils, comma poles", blurb: "profiled geometry neither a width nor a skew can draw" },
+  { file: "printed-rotor-demo.json", label: "Printed rotor: traced hook poles, flared loft", blurb: "a footprint that doubles back, swept with a flare and a twist" },
   { file: "scale-370mm.json", label: "370 mm scale test, 3 mm gap", blurb: "the graded-mesh case; a few million cells" },
   { file: "dual-rotor-370mm.json", label: "370 mm dual rotor", blurb: "a rotor on both sides, no back plate" }
 ];

@@ -8,7 +8,7 @@
  */
 
 import { normalizeSpec, defaultSpec, specToParams, specHash, SPEC_VERSION, getPath, setPath } from "./spec.js";
-import { buildMotor, buildMesh, motorGeom, meshResolution } from "./geometry.js";
+import { buildMotor, buildMesh, motorGeom, meshResolution , inspectRegions } from "./geometry.js";
 import { solveJob, phaseCurrents } from "./solve.js";
 import { motorMetrics } from "./torque.js";
 import { resultsSummary } from "./results.js";
@@ -83,10 +83,30 @@ export async function plan(specIn) {
   // A sector mesh only ever holds its own share of the machine.
   const uniformEquivalent = Math.round(box[0] / hGap) * Math.round(box[1] / hGap) * Math.round(box[2] / hGap);
 
+  /* Per-solid provenance: which rasterization path each part of the machine takes, and what the
+   * traced ones cost. A note rather than a warning — tracing a shape an arc cannot draw is the
+   * point of the feature — but the author deserves to know the trade they made, and the number is a
+   * knob (chordTolerance_mm) rather than a property of the mesh. */
+  const solids = inspectRegions(p);
+  for (const s of solids) {
+    if (s.provenance.path !== "traced") continue;
+    if (!Number.isFinite(s.provenance.volumeError_pct)) notes.push(
+      `${s.name}: the footprint hit its tessellation budget, so its shape is coarser than asked for. Raise design.rotor.poleCurve.chordTolerance_mm or simplify the outline.`);
+    else notes.push(
+      `${s.name} is a traced footprint, so it is clipped and integrated per cell rather than read as a coordinate sector: ` +
+      `${s.provenance.polygonPoints} polygon points at a ${s.provenance.chordTolerance_mm} mm chord tolerance, ` +
+      `worth ${s.provenance.volumeError_pct.toExponential(1)} % of its volume.`);
+    if (s.overlaps) notes.push(
+      `${s.name} is wider than its own pitch, so neighbouring copies run into each other. The permeability blend will average them into something plausible and wrong.`);
+    if (!s.withinDeclaredRadii) notes.push(
+      `${s.name} reaches ${s.radialExtent_mm[0].toFixed(2)}..${s.radialExtent_mm[1].toFixed(2)} mm, outside the rotor annulus it is measured in. Meshed as drawn — intended, or a loft scale past 1?`);
+  }
+
   return {
     specHash: specHash(spec),
     mesh: { ...meshStats(mesh), margin_mm: Math.max(p.marginMin, p.marginFactor * p.ro) },
     resolution_cells: res,
+    solids,
     memory: {
       totalDeviceBytes: mem.total,
       totalDeviceMB: +(mem.total / 1048576).toFixed(1),

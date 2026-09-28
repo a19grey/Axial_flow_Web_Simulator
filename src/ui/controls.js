@@ -70,15 +70,21 @@ export function syncShapeNote() {
   const el = $("#shapeNote");
   if (!el) return;
   const pole = held.design?.rotor?.poleShape, coil = held.design?.stator?.coilShape;
+  const curve = held.design?.rotor?.poleCurve, loft = held.design?.rotor?.poleLoft;
   const parts = [];
-  if (pole) parts.push(`a ${pole.length}-point pole profile, which replaces the pole arc and skew above`);
+  if (curve) {
+    const n = (curve.through || curve.controlPoints || curve.trailing || []).length;
+    parts.push(`a traced pole footprint of ${n} control points, which replaces the pole arc, skew and profile above`);
+  }
+  if (loft) parts.push(`a loft that sweeps it between the gap face and the yoke`);
+  if (pole && !curve) parts.push(`a ${pole.length}-point pole profile, which replaces the pole arc and skew above`);
   if (coil) parts.push(`a ${coil.length}-point coil profile`);
   el.hidden = !parts.length;
   if (!parts.length) return;
   el.innerHTML = `This design carries ${parts.join(" and ")}. `
     + `<button type="button" class="linkish" id="shapeClear">Use plain arcs instead</button>`;
   $("#shapeClear").onclick = () => {
-    if (held.design?.rotor) held.design.rotor.poleShape = null;
+    if (held.design?.rotor) { held.design.rotor.poleShape = null; held.design.rotor.poleCurve = null; held.design.rotor.poleLoft = null; }
     if (held.design?.stator) held.design.stator.coilShape = null;
     syncShapeNote();
     announceSpecChange();

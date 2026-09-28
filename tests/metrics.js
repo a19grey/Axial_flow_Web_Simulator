@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import { serve, CHROME_ARGS } from "../cli/run.js";
 
 import { buildLoop, buildMotor, motorRegions, regionVolume, angularPeriod } from "../src/core/geometry.js";
+import { inspectSolid } from "../src/core/ir.js";
 import { freeSpaceInductance } from "../src/core/metrics.js";
 import { makeMesh, volumeM, CYLINDRICAL } from "../src/core/mesh.js";
 import { MU0 } from "../src/core/constants.js";
@@ -169,6 +170,49 @@ function cpuChecks() {
        `${worst.toExponential(2)}%`);
   }
   report.cases.rasterizationProfiled = profiledRows;
+
+  /* And the same audit for a *traced* pole — a footprint that doubles back on itself, which no pair
+   * of angles can describe, swept with a loft that flares and then closes. Three claims are under
+   * test here and each one would be easy to get wrong silently:
+   *
+   *   - a wedge written as a traced rectangle must rasterize to the *same bits* as the wedge path,
+   *     because otherwise the general path is quietly different physics;
+   *   - the cylindrical cell fraction of a traced footprint is exact, so the only error left is the
+   *     polygon's own area against the curve's closed form — and it must match the tolerance the
+   *     solid reports for itself rather than being larger;
+   *   - the loft must not degrade it, which it would if the footprint were read at the slab centre
+   *     instead of integrated across the slab.
+   */
+  const TRACED = { through: [[0.05, -0.10], [0.40, -0.28], [0.80, -0.18], [0.97, 0.02], [0.70, 0.26], [0.30, 0.20]] };
+  const LOFT = { scale: [1, 1.25, 0.85], twist: [0, 0.04] };
+  const meshOpts = { activeCellsAcrossDiameter: 128, cellsAcrossDiameter: 128, cellsAcrossPoleArc: 24 };
+
+  const asWedge = buildMotor(specToParams(normalizeSpec({ mesh: { mode: "cylindrical", ...meshOpts } }).spec));
+  const asCurve = buildMotor(specToParams(normalizeSpec({
+    design: { rotor: { poleCurve: { controlPoints: [[0, -0.25], [1, -0.25], [1, 0.25], [0, 0.25]], degree: 1 } } },
+    mesh: { mode: "cylindrical", ...meshOpts } }).spec));
+  let diff = 0;
+  for (let i = 0; i < asWedge.mu.length; i++) diff = Math.max(diff, Math.abs(asWedge.mu[i] - asCurve.mu[i]));
+  ok("the default arc traced as a curve rasterizes bit-for-bit", diff === 0, `worst mu difference ${diff}`);
+
+  const tracedRows = [];
+  for (const loft of [null, LOFT]) for (const mode of ["cylindrical", "graded"]) {
+    const { spec } = normalizeSpec({ design: { rotor: { poleCurve: TRACED, poleLoft: loft } },
+                                     mesh: { mode, ...meshOpts } });
+    const job = buildMotor(specToParams(spec));
+    const regions = motorRegions(job.p);
+    const errs = regions.map((r, i) => (job.volumes[i] * job.mesh.sectors - regionVolume(r)) / regionVolume(r) * 100);
+    const worst = Math.max(...errs.map(Math.abs));
+    const pole = regions.find(r => r.name === "rotorPoles");
+    const claimed = inspectSolid(pole).provenance.volumeError_pct;
+    const label = loft ? "lofted" : "prism";
+    tracedRows.push({ mode, loft: !!loft, worst_pct: worst, claimed_pct: claimed });
+    process.stderr.write(`     ${mode.padEnd(12)} worst ${worst.toExponential(2)}%  (traced ${label}, solid claims ${claimed.toExponential(2)}%)\n`);
+    ok(`${mode} rasterization of a traced ${label} pole matches the exact volumes`,
+       worst < (mode === "cylindrical" ? Math.max(1e-3, 2 * claimed) : TOL.rasterCartesian_pct),
+       `${worst.toExponential(2)}%`);
+  }
+  report.cases.rasterizationTraced = tracedRows;
 
   /* The current-angle sweep solves on a 15° grid and then solves once more at the peak of a
    * sin 2γ fit, so the fit has to find a peak the grid does not contain. Sampled from an exact

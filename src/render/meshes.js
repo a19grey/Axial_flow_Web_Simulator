@@ -9,7 +9,8 @@
 
 import { css } from "../ui/format.js";
 import { shapeAt } from "../core/shapes.js";
-import { poleShapeOf } from "../core/geometry.js";
+import { poleShapeOf, poleFootprintOf } from "../core/geometry.js";
+import { curveAt, toPolar, polarToXY, loftAt, curveFrame } from "../core/curves.js";
 
 export const rgba = (hex, spec = 0) => { const n = parseInt(hex.slice(1), 16); return ((n >> 16) & 255) | (((n >> 8) & 255) << 8) | ((n & 255) << 16) | (Math.round(spec * 255) << 24); };
 export class MeshB {
@@ -43,6 +44,7 @@ export function annular(mb, r0, r1, a0, a1, z0, z1, col) {
 export function rotorSolid(mb, p, g, col) {
   /* A profiled pole is drawn as its own solid standing on the yoke ring. An arc — skewed or not —
    * keeps the fused shell below, so every design that predates profiles exports exactly as it did. */
+  if (p.poleCurve) return rotorTraced(mb, p, g, col);
   if (p.poleShape) return rotorProfiled(mb, p, g, col);
   // One watertight solid: a yoke ring with the salient poles fused to its underside.
   const TAU = 2 * Math.PI, P2 = TAU / p.poles, half = p.arc * P2 / 2, th0 = p.theta * Math.PI / 180;
@@ -119,6 +121,105 @@ function rotorProfiled(mb, p, g, col) {
   annular(mb, g.Rri, g.Rro, 0, 2 * Math.PI, g.zTT, g.zYT, col);
   for (let k = 0; k < p.poles; k++)
     shapePrism(mb, shape, { r0: g.Rri, r1: g.Rro, centre: th0 + k * pitch, z0: g.zTB, z1: g.zTT }, col);
+}
+
+/* Ear clipping: a simple polygon to triangles, no holes.
+ *
+ * Needed because a traced footprint is not convex — that is the point of it — and a fan from the
+ * centroid would fold itself inside out on a comma or a hook. The caps of an exported solid have
+ * to be watertight and correctly wound or the STL is not a solid, so this is worth the forty lines.
+ */
+export function earClip(poly) {
+  const n = poly.length;
+  if (n < 3) return [];
+  const area2 = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  let sum = 0;
+  for (let i = 0; i < n; i++) { const a = poly[i], b = poly[(i + 1) % n]; sum += a[0] * b[1] - b[0] * a[1]; }
+  const idx = [...Array(n).keys()];
+  if (sum < 0) idx.reverse();                       // work counter-clockwise
+  const inTri = (a, b, c, p) =>
+    area2(a, b, p) >= 0 && area2(b, c, p) >= 0 && area2(c, a, p) >= 0;
+  const tris = [];
+  let guard = 0;
+  while (idx.length > 3 && guard++ < 4 * n) {
+    let clipped = false;
+    for (let i = 0; i < idx.length; i++) {
+      const ia = idx[(i - 1 + idx.length) % idx.length], ib = idx[i], ic = idx[(i + 1) % idx.length];
+      const a = poly[ia], b = poly[ib], c = poly[ic];
+      if (area2(a, b, c) <= 0) continue;            // reflex, not an ear
+      let ok = true;
+      for (const k of idx) {
+        if (k === ia || k === ib || k === ic) continue;
+        if (inTri(a, b, c, poly[k])) { ok = false; break; }
+      }
+      if (!ok) continue;
+      tris.push([ia, ib, ic]);
+      idx.splice(i, 1);
+      clipped = true;
+      break;
+    }
+    if (!clipped) break;                            // degenerate input: stop rather than spin
+  }
+  if (idx.length === 3) tris.push([idx[0], idx[1], idx[2]]);
+  return tris;
+}
+
+/* One traced pole as a closed solid: the footprint lofted between the two faces.
+ *
+ * Every ring is sampled at the *same* curve parameters so the sides are quads rather than a
+ * re-triangulation problem, and the caps are ear-clipped because a footprint that doubles back is
+ * not convex. This is the surface the 3D view draws and the STL export writes, and it is built from
+ * the same curve and the same loft the solver rasterized — so the shape you print is the shape that
+ * was solved, which is the only reason this file exists rather than a display mesh.
+ */
+export function curvePrism(mb, { curve, loft, frame, z0, z1, flip = false, rings = 14, perSpan = 10 }, col) {
+  const nPts = curve.spans * perSpan;
+  const levels = loft ? rings : 2;
+  const ringAt = L => {
+    const t = levels === 1 ? 0 : L / (levels - 1);
+    const m = loftAt(loft, flip ? 1 - t : t), z = z0 + (z1 - z0) * t, out = [];
+    for (let i = 0; i < nPts; i++) {
+      const q = curveAt(curve, i * curve.spans / nPts);
+      const pl = toPolar(frame, q.u, q.v, m), xy = polarToXY(pl.r, pl.th);
+      out.push([xy[0], xy[1], z]);
+    }
+    return out;
+  };
+  const R = [];
+  for (let L = 0; L < levels; L++) R.push(ringAt(L));
+  // Sides, with a normal per quad from its own edges: exact for a prism, a shading approximation
+  // for a loft, and nothing in the solve comes from here.
+  for (let L = 0; L < levels - 1; L++) for (let i = 0; i < nPts; i++) {
+    const j = (i + 1) % nPts, a = R[L][i], b = R[L][j], c = R[L + 1][j], d = R[L + 1][i];
+    const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+    let nx = e1[1] * e2[2] - e1[2] * e2[1], ny = e1[2] * e2[0] - e1[0] * e2[2], nz = e1[0] * e2[1] - e1[1] * e2[0];
+    const len = Math.hypot(nx, ny, nz) || 1; nx /= len; ny /= len; nz /= len;
+    const nrm = [-nx, -ny, -nz];
+    mb.quad(a, b, c, d, nrm, nrm, nrm, nrm, col);
+  }
+  const up = [0, 0, 1], dn = [0, 0, -1];
+  const cap = (ring, normal, reverse) => {
+    const flat = ring.map(q => [q[0], q[1]]);
+    for (const [i, j, k] of earClip(flat)) {
+      const a = ring[i], b = ring[j], c = ring[k];
+      if (reverse) { mb.v(a, normal, col); mb.v(c, normal, col); mb.v(b, normal, col); }
+      else { mb.v(a, normal, col); mb.v(b, normal, col); mb.v(c, normal, col); }
+    }
+  };
+  cap(R[levels - 1], up, false);
+  cap(R[0], dn, true);
+}
+
+/* The rotor as a yoke ring with traced poles standing on it. */
+function rotorTraced(mb, p, g, col) {
+  const fp = poleFootprintOf(p);
+  if (!fp) return rotorProfiled(mb, p, g, col);
+  const th0 = p.theta * Math.PI / 180, poles = Math.round(p.poles);
+  annular(mb, g.Rri, g.Rro, 0, 2 * Math.PI, g.zTT, g.zYT, col);
+  for (let k = 0; k < poles; k++)
+    curvePrism(mb, { curve: fp.curve, loft: fp.loft,
+                     frame: curveFrame({ r0: g.Rri, r1: g.Rro, centre: th0 + k * 2 * Math.PI / poles, count: poles }),
+                     z0: g.zTB, z1: g.zTT }, col);
 }
 
 export function ribbon(mb, pts, z, w, col, closed = true) {

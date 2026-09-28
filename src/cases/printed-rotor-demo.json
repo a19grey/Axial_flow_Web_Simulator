@@ -1,0 +1,103 @@
+{
+  "format": "axial-flux-project",
+  "version": 2,
+  "name": "Printed rotor: traced hook poles with a flared, twisting loft",
+  "notes": "A rotor that only a 3D printer makes, described the way the general geometry language describes one. The pole footprint is not an arc and is not a width-against-radius profile either: it is a closed curve through eight control points, in normalized wedge coordinates where u runs 0 at the bore to 1 at the rim and v is the angle in units of the pole pitch, so v = +-0.5 is where neighbouring poles would touch. The outline doubles back on itself, which no pair of angles at a radius can describe. On top of that the pole is lofted: between the gap face and the yoke it grows by 10 percent and then closes to 96, fans 10 percent wider in angle near the top, and swings its centre line by 0.045 of a pitch - a shape with an overhang and a waist, which is exactly the freedom printing buys and casting or lamination does not.\n\nWhat makes it trustworthy rather than merely pretty: in normalized coordinates the footprint maps affinely into the (r, theta) plane, where cylindrical cells are axis-aligned rectangles, so each cell's fraction is a polygon clip and a Green's-theorem contour integral rather than a supersample. The rasterization is exact; the only error left is the chord tolerance of the tessellation, and the solid reports it - 246 polygon points at 0.002 mm, worth 9.7e-3 percent of its volume, which is what the meshed-against-exact volume audit then measures. Set the same footprint to a plain rectangle and it rasterizes bit-for-bit onto the arc the tool has always drawn, which is the check that the general path is not quietly different physics.\n\nThe operating point is picked, not optimized: a coarse rotor-angle sweep at 8 degree steps put the peak near 24 degrees mechanical and it was refined to 2. At 8 cells across the air gap and 96 across the pole arc the torque is -5.68 mNm and the two Maxwell-stress surfaces agree to 1.6 percent; at 6 and 72 it is -5.64 mNm with a 3.1 percent spread, so the torque is converged and the spread was the surfaces, not the answer. This is a demonstration of the shape language, not a good machine - a hook pole with this much swing has heavy ripple, which the angle sweep above shows plainly.",
+  "design": {
+    "stator": {
+      "poles": 8,
+      "copperLayers": 4,
+      "innerRadius_mm": 22,
+      "outerRadius_mm": 52,
+      "turnsPerLayer": 7,
+      "peakCurrent_A": 8,
+      "thickness_mm": 1.6,
+      "tracePitch_mm": 0.6,
+      "traceWidth_mm": 0.4,
+      "edgeMargin_mm": 0.5,
+      "copperThickness_um": 70
+    },
+    "rotor": {
+      "airGap_mm": 2,
+      "mu_r": 25,
+      "poleHeight_mm": 5,
+      "yokeThickness_mm": 4,
+      "poleCurve": {
+        "through": [
+          [
+            0.07,
+            -0.06
+          ],
+          [
+            0.3,
+            -0.26
+          ],
+          [
+            0.62,
+            -0.24
+          ],
+          [
+            0.9,
+            -0.05
+          ],
+          [
+            0.95,
+            0.1
+          ],
+          [
+            0.72,
+            0.22
+          ],
+          [
+            0.4,
+            0.14
+          ],
+          [
+            0.12,
+            0.13
+          ]
+        ],
+        "chordTolerance_mm": 0.002
+      },
+      "poleLoft": {
+        "scale": [
+          1,
+          1.1,
+          0.96
+        ],
+        "widen": [
+          1,
+          1,
+          1.1
+        ],
+        "twist": [
+          0,
+          0.045
+        ],
+        "pivot": 0.5
+      }
+    },
+    "backPlate": {
+      "enabled": true,
+      "mu_r": 25,
+      "thickness_mm": 4,
+      "gapBelowPcb_mm": 1
+    }
+  },
+  "operatingPoint": {
+    "rotorAngle_deg": 24,
+    "currentAngle_elecDeg": 45,
+    "speed_rpm": 0,
+    "windingTemperature_C": 20
+  },
+  "mesh": {
+    "mode": "cylindrical",
+    "cellsAcrossAirGap": 8,
+    "cellsAcrossPoleArc": 96,
+    "activeCellsAcrossDiameter": 140,
+    "sector": true
+  },
+  "solver": {
+    "tolerance": 1e-06
+  }
+}

@@ -10,7 +10,10 @@
 import { LAYER_Z, RASTER_SUPERSAMPLE } from "./constants.js";
 import { makeMesh, uniformMesh, cellsAcross, CYLINDRICAL } from "./mesh.js";
 import { gradedAxis, symmetricAxis } from "./grading.js";
-import { DEG, resolveShape, shapeAt, shapeOutline, shapeAreaFraction, shapeMaxHalf } from "./shapes.js";
+import { DEG, resolveShape, shapeAt, shapeOutline } from "./shapes.js";
+import { wedgeSolid, tracedSolid, solidVolume, solidStations, solidAngularHalf, solidRadialExtent,
+         solidFrame, solidHeightFraction, footprintCurve, footprintLoft, inspectSolid } from "./ir.js";
+import { polygonRT, coverageTable, footprintCopies, clampTable, pointInPolygonRT } from "./raster.js";
 
 export const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
 
@@ -186,6 +189,20 @@ export function poleShapeOf(p) {
                         profile: p.poleShape });
 }
 
+/* The rotor pole as a *traced* footprint, or null if the design does not use one.
+ *
+ * `poleCurve` is the general form: a closed control-point curve in normalized wedge coordinates,
+ * optionally swept by `poleLoft`. Set, it replaces the arc, the skew and the width/offset profile
+ * entirely — this is the shape a 3D printer can make and a pair of angles cannot describe. Absent,
+ * every existing design takes exactly the path it always did.
+ */
+export function poleFootprintOf(p) {
+  if (!p.poleCurve) return null;
+  const curve = footprintCurve(p.poleCurve, "design.rotor.poleCurve");
+  const loft = footprintLoft(p.poleLoft);
+  return { curve, loft, tolerance_mm: p.poleCurve.chordTolerance_mm || undefined };
+}
+
 /* The magnetic parts of the machine, as a list rather than as branches in the rasterizer.
  *
  * Every part of an axial-flux machine is an annular sector extrusion: a radial interval, an axial
@@ -203,34 +220,42 @@ export function motorRegions(p) {
   const th0 = p.theta * Math.PI / 180;
   const poleShape = poleShapeOf(p);
   const poleArc = { count: p.poles, phase: th0, shape: poleShape, pitchAngle: poleShape.pitch };
+  const traced = poleFootprintOf(p);
   const full = null;
 
-  R.push({ name: "rotorPoles", mu_r: p.murRot, rho: p.rotorRho, group: "rotorTop",
-           r0: g.Rri, r1: g.Rro, z0: g.zTB, z1: g.zTT, arc: poleArc });
-  R.push({ name: "rotorYoke", mu_r: p.murRot, rho: p.rotorRho, group: "rotorTop",
-           r0: g.Rri, r1: g.Rro, z0: g.zTT, z1: g.zYT, arc: full });
+  /* The pole is the one region whose footprint the author can trace, so it is the one region built
+   * two ways. `flip` runs the loft from the gap face inward on the mirrored rotor, so "flares as it
+   * leaves the gap" means the same thing on both sides of a dual-sided machine rather than being
+   * upside down on one of them. */
+  const pole = (fields, flip) => traced
+    ? tracedSolid(fields, { count: Math.round(p.poles), phase: th0, curve: traced.curve,
+                            loft: traced.loft, flip, tolerance_mm: traced.tolerance_mm })
+    : wedgeSolid({ ...fields, arc: poleArc });
+
+  R.push(pole({ name: "rotorPoles", mu_r: p.murRot, rho: p.rotorRho, group: "rotorTop",
+                r0: g.Rri, r1: g.Rro, z0: g.zTB, z1: g.zTT }, false));
+  R.push(wedgeSolid({ name: "rotorYoke", mu_r: p.murRot, rho: p.rotorRho, group: "rotorTop",
+                      r0: g.Rri, r1: g.Rro, z0: g.zTT, z1: g.zYT, arc: full }));
 
   if (g.dual) {
-    R.push({ name: "rotorPolesLower", mu_r: p.murRot, rho: p.rotorRho, group: "rotorBottom",
-             r0: g.Rri, r1: g.Rro, z0: g.zMT, z1: g.zMB, arc: poleArc });
-    R.push({ name: "rotorYokeLower", mu_r: p.murRot, rho: p.rotorRho, group: "rotorBottom",
-             r0: g.Rri, r1: g.Rro, z0: g.zMY, z1: g.zMT, arc: full });
+    R.push(pole({ name: "rotorPolesLower", mu_r: p.murRot, rho: p.rotorRho, group: "rotorBottom",
+                  r0: g.Rri, r1: g.Rro, z0: g.zMT, z1: g.zMB }, true));
+    R.push(wedgeSolid({ name: "rotorYokeLower", mu_r: p.murRot, rho: p.rotorRho, group: "rotorBottom",
+                        r0: g.Rri, r1: g.Rro, z0: g.zMY, z1: g.zMT, arc: full }));
   } else if (g.back) {
-    R.push({ name: "backPlate", mu_r: p.murBack, rho: p.backRho, group: "stator",
-             r0: g.Rri, r1: g.Rro, z0: g.zBB, z1: g.zBT, arc: full });
+    R.push(wedgeSolid({ name: "backPlate", mu_r: p.murBack, rho: p.backRho, group: "stator",
+                        r0: g.Rri, r1: g.Rro, z0: g.zBB, z1: g.zBT, arc: full }));
   }
   return R;
 }
 
+/* Per-solid provenance, validity and volume, with no mesh and no solve: what AFS.plan() reports and
+ * what an authoring loop reads. */
+export const inspectRegions = p => motorRegions(p).map(inspectSolid);
+
 /* Exact volume of a region, cubic millimetres. Independent of the mesh, so comparing it with the
  * volume the rasterizer actually laid down is a direct check on the rasterizer. */
-export function regionVolume(r) {
-  const annulus = Math.PI * (r.r1 * r.r1 - r.r0 * r.r0);
-  // The profile's swept area is closed-form, so this stays an independent check on the rasterizer
-  // however complicated the footprint gets. Centre offsets move a wedge, they do not resize it.
-  const frac = r.arc ? shapeAreaFraction(r.arc.shape, r.r0, r.r1) : 1;
-  return annulus * frac * (r.z1 - r.z0);
-}
+export const regionVolume = solidVolume;
 
 /* A cylindrical (r, theta, z) mesh.
  *
@@ -249,9 +274,15 @@ function cylindricalMotorMesh(p) {
   /* Radius runs from the axis to the far field. The bore carries return flux but no structure, so
    * it is allowed to coarsen; the annulus and a margin either side of it are resolved. */
   const rMax = L;
+  /* Hard points: the radii the mesh must put a face on. The machine's own bore and rim, the copper
+   * annulus, and — for a traced pole — the radii its footprint actually reaches, which a loft can
+   * pull well inside the region it is declared in. Snapping to those is what keeps a traced edge
+   * from being smeared across the cell it ends in. */
+  const rHard = [g.Rri, g.Rro, p.ri, p.ro];
+  for (const reg of motorRegions(p)) if (reg.footprint) rHard.push(reg.rLo, reg.rHi);
   const re = gradedAxis(0, rMax,
     [{ from: Math.max(0, g.Rri - 2 * hActive), to: Math.min(rMax, g.Rro + 2 * hActive), h: hActive }],
-    [g.Rri, g.Rro, p.ri, p.ro], hFar, growth);
+    rHard, hFar, growth);
 
   /* Angle. Uniform cells, because the rotor turns and any grading would have to turn with it,
    * which would throw away the cached Biot-Savart field on every step of an angle sweep. */
@@ -432,6 +463,32 @@ function arcFractionOverCell(arc, r0, r1, ra, rb, t0, t1) {
   return I / (0.5 * (rb * rb - ra * ra) * (t1 - t0));
 }
 
+/* The (r, theta) coverage table of a traced footprint, averaged over a height interval.
+ *
+ * `sLo`..`sHi` are height fractions of the solid, which for a prism is the whole of it and for a
+ * lofted solid is the part of one z-slab that lies inside it. Two-point Gauss across that interval:
+ * the footprint's area is a low-order polynomial in height under a Bezier loft, so two nodes is far
+ * better than reading the shape at the slab centre and calling it the slab, and it costs one extra
+ * clip pass over a polygon rather than anything per cell.
+ */
+const GAUSS2 = [(1 - 1 / Math.sqrt(3)) / 2, (1 + 1 / Math.sqrt(3)) / 2];
+
+function tracedTable(reg, mesh, sLo, sHi, scratch) {
+  const fp = reg.footprint, frame = solidFrame(reg);
+  const nodes = Math.abs(sHi - sLo) > 1e-12 ? GAUSS2.map(g => sLo + g * (sHi - sLo)) : [sLo];
+  const w = 1 / nodes.length;
+  let table = scratch, measure = 0, budgeted = false;
+  nodes.forEach((sq, q) => {
+    const poly = polygonRT(fp.curve, frame, { loft: reg.loft, s: sq, tolerance_mm: fp.tolerance_mm });
+    budgeted = budgeted || poly.budgeted;
+    const copies = footprintCopies(poly.points, fp, mesh.y0, mesh.y1);
+    const r = coverageTable(copies, mesh, { into: table, weight: w, reset: q === 0 });
+    table = r.table; measure += r.measure;
+  });
+  const overshoot = clampTable(table);
+  return { table, measure, overshoot, budgeted };
+}
+
 /* Cylindrical rasterization is *exact*.
  *
  * Every region is a product of intervals in (r, theta, z): an annular sector extruded in z. A cell
@@ -458,8 +515,20 @@ function rasterizeCylindrical(mesh, p, regions, volumes) {
       const a = Math.max(re[i], reg.r0), b = Math.min(re[i + 1], reg.r1);
       fRad[i] = b > a ? (b * b - a * a) / (re[i + 1] * re[i + 1] - re[i] * re[i]) : 0;
     }
-    let fArc = null, fArcRT = null;
-    if (reg.arc) {
+    let fArc = null, fArcRT = null, traced = null;
+    if (reg.footprint) {
+      /* A traced footprint is a closed polygon in the (r, theta) plane, and a cylindrical cell is an
+       * axis-aligned rectangle in that same plane, so its cell fraction is a clip and a Green's
+       * theorem contour integral — exact, not supersampled (see raster.js). The polygon already
+       * carries the radial extent, so the separate radial fraction is 1 and the inner loop below is
+       * untouched: `fArcRT` means the same thing it does for a profiled wedge.
+       *
+       * A prism's table is the same at every height and is built once here. A lofted solid's is
+       * not, and is rebuilt per z-slab in the loop below, averaged across the slab. */
+      fRad.fill(1);
+      traced = { scratch: reg.loft ? new Float64Array(nr * nt) : null };
+      if (!reg.loft) fArcRT = tracedTable(reg, mesh, 0, 1, null).table;
+    } else if (reg.arc) {
       /* A wedge of constant width and no offset is the same in every ring, so it costs one
        * angular table. Anything that varies with radius — a skew, a comma, any profile — costs an
        * nr x ntheta table and is still exact per cell, because the wedge is still bounded by two
@@ -476,7 +545,7 @@ function rasterizeCylindrical(mesh, p, regions, volumes) {
             fArcRT[i * nt + j] = arcFractionOverCell(reg.arc, reg.r0, reg.r1, re[i], re[i + 1], the[j], the[j + 1]);
       }
     }
-    return { reg, index, fRad, fArc, fArcRT, inv: 1 / reg.mu_r };
+    return { reg, index, fRad, fArc, fArcRT, traced, inv: 1 / reg.mu_r };
   });
 
   for (let iz = 0; iz < nz; iz++) {
@@ -484,7 +553,18 @@ function rasterizeCylindrical(mesh, p, regions, volumes) {
     const live = [];
     for (const t of tab) {
       const fz = overlap(za, zb, t.reg.z0, t.reg.z1) / dz;
-      if (fz > 0) live.push({ ...t, fz });
+      if (fz <= 0) continue;
+      let fArcRT = t.fArcRT;
+      if (t.traced && t.traced.scratch) {
+        /* The footprint changes with height, so this slab's coverage is the average over the part of
+         * the slab that is actually inside the solid. Two-point Gauss over that sub-interval: the
+         * area varies as a low-order polynomial in height, so two nodes is a great deal better than
+         * reading the footprint at the slab centre and calling it the slab. */
+        const zLo = Math.max(za, Math.min(t.reg.z0, t.reg.z1)), zHi = Math.min(zb, Math.max(t.reg.z0, t.reg.z1));
+        fArcRT = tracedTable(t.reg, mesh, solidHeightFraction(t.reg, zLo), solidHeightFraction(t.reg, zHi),
+                             t.traced.scratch).table;
+      }
+      live.push({ ...t, fz, fArcRT });
     }
     if (!live.length) continue;
     for (let j = 0; j < nt; j++) {
@@ -521,7 +601,7 @@ function rasterizeCartesian(mesh, p, regions, volumes) {
 
   // Radial extent that any region reaches, so a cell far from the machine can be skipped at once.
   let rLo = Infinity, rHi = 0;
-  for (const r of regions) { rLo = Math.min(rLo, r.r0); rHi = Math.max(rHi, r.r1); }
+  for (const r of regions) { rLo = Math.min(rLo, r.rLo ?? r.r0); rHi = Math.max(rHi, r.rHi ?? r.r1); }
   if (!regions.length) return mu;
 
   for (let iz = 0; iz < nz; iz++) {
@@ -530,11 +610,22 @@ function rasterizeCartesian(mesh, p, regions, volumes) {
     for (let n = 0; n < regions.length; n++) {
       const reg = regions[n];
       const fz = overlap(za, zb, reg.z0, reg.z1) / dz;
-      if (fz > 0) live.push({ reg, fz, index: n, inv: 1 / reg.mu_r,
-                              pitch: reg.arc ? 2 * Math.PI / reg.arc.count : 0,
-                              // Constant-width wedges skip the per-sample profile lookup entirely.
-                              flat: reg.arc ? reg.arc.shape.constant : false,
-                              halfArc: reg.arc && reg.arc.shape.constant ? reg.arc.shape.pts[0].half : 0 });
+      if (fz <= 0) continue;
+      /* A traced footprint is tested as a polygon in (r, theta), at this slab's height. The
+       * Cartesian path supersamples in plane whatever the footprint is, so reading the loft at the
+       * slab centre is consistent with the accuracy it already has — the cylindrical mesh is where
+       * the exact answer lives. */
+      const poly = reg.footprint
+        ? polygonRT(reg.footprint.curve, solidFrame(reg),
+                    { loft: reg.loft, s: solidHeightFraction(reg, 0.5 * (za + zb)),
+                      tolerance_mm: reg.footprint.tolerance_mm }).points
+        : null;
+      live.push({ reg, fz, index: n, inv: 1 / reg.mu_r, poly,
+                  pitch: reg.footprint ? reg.footprint.pitch : reg.arc ? 2 * Math.PI / reg.arc.count : 0,
+                  phase: reg.footprint ? reg.footprint.phase : reg.arc ? reg.arc.phase : 0,
+                  // Constant-width wedges skip the per-sample profile lookup entirely.
+                  flat: reg.arc ? reg.arc.shape.constant : false,
+                  halfArc: reg.arc && reg.arc.shape.constant ? reg.arc.shape.pts[0].half : 0 });
     }
     if (!live.length) continue;
     const hit = new Float64Array(live.length);
@@ -554,8 +645,15 @@ function rasterizeCartesian(mesh, p, regions, volumes) {
           const th = Math.atan2(sy, sx);
           for (let n = 0; n < live.length; n++) {
             const L = live[n];
-            if (r < L.reg.r0 || r > L.reg.r1) continue;
-            if (L.reg.arc) {
+            if (r < (L.reg.rLo ?? L.reg.r0) || r > (L.reg.rHi ?? L.reg.r1)) continue;
+            if (L.poly) {
+              // Reduce the angle into the pitch about this copy's centre, so one polygon serves
+              // every copy. Valid exactly while the footprint stays inside its own pitch, which is
+              // what inspectSolid reports as `overlaps`.
+              const m = L.pitch;
+              const d = ((th - L.phase) % m + m + m / 2) % m - m / 2;
+              if (!pointInPolygonRT(L.poly, r, L.phase + d)) continue;
+            } else if (L.reg.arc) {
               const m = L.pitch;
               let centre = L.reg.arc.phase, halfArc = L.halfArc;
               if (!L.flat) ({ half: halfArc, centre } = arcAt(L.reg.arc, L.reg.r0, L.reg.r1, r));
@@ -620,7 +718,8 @@ export function meshResolution(mesh, p) {
   if (cyl) {
     // Angular cells spanning one pole arc: the feature the theta mesh exists to resolve.
     // The widest the pole ever gets: the angular feature the theta mesh has to resolve.
-    const arcSpan = 2 * shapeMaxHalf(poleShapeOf(p));
+    const poleSolid = motorRegions(p).find(r => r.name === "rotorPoles");
+    const arcSpan = 2 * solidAngularHalf(poleSolid);
     res.poleArc = arcSpan / ((mesh.y1 - mesh.y0) / mesh.ny);
     res.polePitch = (2 * Math.PI / p.poles) / ((mesh.y1 - mesh.y0) / mesh.ny);
   }

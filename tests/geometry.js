@@ -21,6 +21,11 @@ import { closedCurve, curveAt, refine, curveArea, curveAreaFraction, curveFrame,
          curveToVector, curveFromVector, curveBounds, bezierAt, CurveError,
          twoSidedCurve, twoSidedFromVector, twoSidedBounds } from "../src/core/curves.js";
 import { normalizeSpec } from "../src/core/spec.js";
+import { makeMesh, CYLINDRICAL } from "../src/core/mesh.js";
+import { polygonRT, polygonMeasure, coverageTable, clampTable, footprintCopies, clipToBand,
+         pointInPolygonRT } from "../src/core/raster.js";
+import { wedgeSolid, tracedSolid, solidVolume, solidAngularHalf, solidRadialExtent, solidFrame,
+         solidHeightFraction, solidProvenance, inspectSolid, footprintCurve, footprintLoft } from "../src/core/ir.js";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const problems = [];
@@ -454,6 +459,121 @@ function curves() {
                           tessellationPoints: insp.points, areaFraction: insp.areaFraction };
 }
 
+/* ---- solids and traced rasterization --------------------------------------------------------- */
+
+/* The IR and the polygon rasterizer behind it. The claim under test is the one the whole design
+ * rests on: a traced footprint is *not* a supersampled approximation on a cylindrical mesh. In
+ * normalized coordinates the footprint maps affinely into the (r, theta) plane, where cells are
+ * axis-aligned rectangles, so a clip and a Green's-theorem contour integral give the cell fraction
+ * with no sampling at all — and the only error left is the tessellation, which the solid reports
+ * for itself. */
+function solids() {
+  process.stderr.write("\n8. solids and traced rasterization\n");
+
+  const frame = curveFrame({ r0: 15, r1: 40, count: 8 });
+  const rect = closedCurve([[0, -0.25], [1, -0.25], [1, 0.25], [0, 0.25]], { degree: 1 });
+
+  // A rectangle in (u, v) is an annular sector, whose area anyone can write down.
+  const poly = polygonRT(rect, frame, {}).points;
+  const sector = 0.5 * (40 * 40 - 15 * 15) * (0.5 * 2 * Math.PI / 8);
+  ok("a traced rectangle measures as the annular sector it is",
+     near(Math.abs(polygonMeasure(poly)), sector, 1e-14), `${sector.toFixed(4)} mm^2`);
+
+  // The cell fractions must sum back to that measure exactly — this is the exactness claim, and it
+  // is a sum over ~4000 clipped cells, so a systematic bias of any kind would show.
+  const nr = 40, nt = 96, re = new Float64Array(nr + 1), the = new Float64Array(nt + 1);
+  for (let i = 0; i <= nr; i++) re[i] = 50 * i / nr;
+  for (let j = 0; j <= nt; j++) the[j] = 2 * Math.PI * j / nt;
+  const mesh = makeMesh(re, the, new Float64Array([0, 1]), { kind: CYLINDRICAL, periodicY: true });
+  const sumOver = (curve, loft = null, s = 0) => {
+    const base = polygonRT(curve, frame, { loft, s, tolerance_mm: 0.002 });
+    const copies = footprintCopies(base.points, { count: 8, phase: 0, pitch: Math.PI / 4 }, mesh.y0, mesh.y1);
+    const { table } = coverageTable(copies, mesh);
+    clampTable(table);
+    let sum = 0;
+    for (let i = 0; i < nr; i++) for (let j = 0; j < nt; j++) sum += table[i * nt + j] * mesh.rArea[i] * (the[j + 1] - the[j]);
+    return { sum, exact: 8 * Math.abs(polygonMeasure(base.points)), points: base.points.length, copies: copies.length };
+  };
+  const a = sumOver(rect);
+  ok("clipped cell fractions sum to the polygon exactly", near(a.sum, a.exact, 1e-12),
+     `${(a.sum / a.exact - 1).toExponential(1)} over ${nr * nt} cells`);
+  const comma = splineThrough([[0.05, -0.10], [0.35, -0.28], [0.75, -0.20], [0.97, 0.02], [0.7, 0.26], [0.3, 0.20], [0.05, 0.12]]);
+  const b = sumOver(comma);
+  ok("and so do the fractions of a footprint that doubles back", near(b.sum, b.exact, 1e-12),
+     `${b.points} polygon points, ${b.copies} copies`);
+  const loft = loftSchedule({ scale: [1, 1.3, 0.85], twist: [0, 0.05] });
+  const c = sumOver(comma, loft, 0.6);
+  ok("and of a lofted one at height", near(c.sum, c.exact, 1e-12));
+
+  // Copies, and the wrap that a footprint straddling theta = 0 depends on.
+  const full = footprintCopies(poly, { count: 8, phase: 0, pitch: Math.PI / 4 }, 0, 2 * Math.PI);
+  ok("a wedge straddling theta = 0 is emitted at both ends of a full turn", full.length === 9,
+     `${full.length} copies of 8`);
+  const sect = footprintCopies(poly, { count: 8, phase: 0, pitch: Math.PI / 4 }, 0, Math.PI / 2);
+  ok("and a sector window takes only the copies it contains", sect.length === 3, `${sect.length} copies`);
+  ok("clipping to a band outside the polygon leaves nothing",
+     clipToBand(poly, 0, 45, 50).length === 0);
+
+  // Solids: the volume every audit is measured against, and the reach a loft changes.
+  const fields = { name: "pole", mu_r: 20, group: "rotorTop", r0: 15, r1: 40, z0: 3, z1: 6 };
+  const prism = tracedSolid(fields, { count: 8, curve: comma });
+  const lofted = tracedSolid(fields, { count: 8, curve: comma, loft });
+  ok("a traced prism's volume is its area times its height",
+     near(solidVolume(prism), 8 * curveArea(comma, frame).area * 3, 1e-12));
+  ok("a flaring loft is bigger than the prism it started from", solidVolume(lofted) > solidVolume(prism),
+     `${solidVolume(lofted).toFixed(1)} vs ${solidVolume(prism).toFixed(1)} mm^3`);
+  const [lo, hi] = solidRadialExtent(lofted);
+  ok("and reaches further than the footprint alone", hi > solidRadialExtent(prism)[1] && lo < solidRadialExtent(prism)[0],
+     `${lo.toFixed(2)}..${hi.toFixed(2)} mm`);
+  ok("the reach is recorded on the solid, because both rasterizers and the volume must agree on it",
+     lofted.rLo === lo && lofted.rHi === hi);
+
+  // The wedge path is untouched: a solid with an arc still answers with the old closed form.
+  const shape = resolveShape({ count: 8, fraction: 0.5 });
+  const wedge = wedgeSolid({ ...fields, arc: { count: 8, phase: 0, shape, pitchAngle: shape.pitch } });
+  ok("a wedge solid's volume is the old closed form",
+     near(solidVolume(wedge), Math.PI * (40 * 40 - 15 * 15) * shapeAreaFraction(shape, 15, 40) * 3, 1e-12));
+
+  // Flip: the loft runs from each rotor's own gap face, so a mirrored pole is not upside down.
+  const down = tracedSolid({ ...fields, z0: -6, z1: -3 }, { count: 8, curve: comma, loft, flip: true });
+  ok("a flipped loft starts at the face nearest the gap",
+     solidHeightFraction(down, -3) === 0 && solidHeightFraction(down, -6) === 1);
+  ok("and an unflipped one starts at z0", solidHeightFraction(lofted, 3) === 0 && solidHeightFraction(lofted, 6) === 1);
+
+  // Provenance: the number the solid claims for itself is the number the audit must find.
+  const prov = solidProvenance(prism);
+  ok("a traced solid says which path it takes and what it costs",
+     prov.path === "traced" && prov.volumeError_pct > 0 && prov.volumeError_pct < 0.05,
+     `${prov.polygonPoints} points, ${prov.volumeError_pct.toExponential(1)} %`);
+  ok("and an exact one says so", solidProvenance(wedge).path === "exact");
+  const tight = solidProvenance(tracedSolid(fields, { count: 8, curve: comma, tolerance_mm: 1e-4 }));
+  ok("a tighter chord tolerance is a smaller error, not a different shape",
+     tight.volumeError_pct < prov.volumeError_pct / 4,
+     `${prov.volumeError_pct.toExponential(1)} -> ${tight.volumeError_pct.toExponential(1)} %`);
+
+  // Sampling and clipping must agree about what is inside: they are the two rasterizer paths.
+  const insideAt = (r, th) => pointInPolygonRT(polygonRT(comma, frame, {}).points, r, th);
+  ok("the sampled path and the clipped path agree about a point well inside", insideAt(30, 0.0));
+  ok("and about one outside", !insideAt(30, 0.35));
+
+  // Authoring, including the errors, because the customer is a model reading the reply.
+  ok("a footprint can be authored as control points",
+     footprintCurve({ controlPoints: [[0, 0], [1, -0.2], [1, 0.2], [0, 0.1]], degree: 1 }).spans === 4);
+  ok("or as points to pass through", footprintCurve({ through: [[0.1, -0.2], [0.9, 0], [0.5, 0.25], [0.2, 0.1]] }).spans === 4);
+  ok("or as two chains that cannot cross",
+     footprintCurve({ trailing: [-0.2, -0.3], leading: [0.2, 0.3] }).spans === 4);
+  ok("and a footprint with no points says what the forms are",
+     threw(() => footprintCurve({}, "design.rotor.poleCurve"))?.message.includes("trailing/leading"));
+  ok("a loft with no channels set is no loft at all", footprintLoft({ scale: [1] }) === null);
+  ok("and one with a flare is", footprintLoft({ scale: [1, 1.2] }) !== null);
+
+  const insp = inspectSolid(lofted);
+  report.cases.solids = { prismVolume_mm3: solidVolume(prism), loftVolume_mm3: solidVolume(lofted),
+                          reach_mm: [lo, hi], angularHalf_deg: solidAngularHalf(lofted) * 180 / Math.PI,
+                          clearance_deg: insp.clearance_deg, provenance: prov,
+                          frameRadius: [solidFrame(prism).r0, solidFrame(prism).r1] };
+}
+
 /* ---- main ------------------------------------------------------------------------------------- */
 
 const args = process.argv.slice(2);
@@ -466,6 +586,7 @@ scopes();
 reuse();
 shapes();
 curves();
+solids();
 
 if (outFile) {
   await mkdir(dirname(resolve(ROOT, outFile)), { recursive: true });

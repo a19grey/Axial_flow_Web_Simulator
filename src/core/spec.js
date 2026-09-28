@@ -8,6 +8,7 @@
  */
 
 import { PCB, SOLVER_DEFAULTS, MATERIALS, CORE_LOSS_DEFAULTS, COPPER_THICKNESS_UM } from "./constants.js";
+import { footprintCurve, tracedSolid, inspectSolid, DEFAULT_CHORD_TOLERANCE_MM } from "./ir.js";
 
 export const SPEC_FORMAT = "axial-flux-project";
 export const SPEC_VERSION = 2;
@@ -77,6 +78,30 @@ export function defaultSpec() {
          * poleSkew_deg, and lets a 3D-printed rotor carry a pole no arc can draw — a comma, a
          * teardrop, a hook. Null keeps the straight-sided arc. */
         poleShape: null,
+        /* The general footprint: a closed control-point curve in normalized wedge coordinates,
+         * where u runs 0 at the inner radius to 1 at the outer and v is the angle in units of the
+         * pole pitch, so v = +-0.5 is where neighbouring poles would touch. Set, it replaces
+         * poleArcFraction, poleSkew_deg and poleShape entirely, and it can draw what none of them
+         * can: an outline that doubles back on itself.
+         *
+         *   { "through": [[0.05, -0.10], [0.4, -0.28], [0.95, 0.02], [0.3, 0.22]] }
+         *   { "controlPoints": [[...], ...], "degree": 3 }
+         *   { "trailing": [-0.2, -0.3, -0.25], "leading": [0.2, 0.3, 0.25] }
+         *
+         * The last form is two radially monotone chains, which cannot cross whatever values it is
+         * given — the form an optimizer samples. chordTolerance_mm sets how finely the curve is
+         * tessellated before it is rasterized; the resulting volume error is reported per solid. */
+        poleCurve: null,
+        /* How the footprint changes between the gap face and the yoke, one Bezier control list per
+         * channel against normalized height: one value is a constant, two a ramp, three the
+         * quadratic flare or waist that only a printed rotor can hold.
+         *
+         *   { "scale": [1, 1.3, 0.85], "widen": [1, 1.1, 1], "twist": [0, 0.05], "pivot": 0.5 }
+         *
+         * scale sizes the footprint about the pivot radius, widen fans it angularly without growing
+         * it radially, twist swings its centre line (poleSkew_deg generalized), shift slides it
+         * radially. On a dual-sided machine the schedule runs from each rotor's own gap face. */
+        poleLoft: null,
         coreLoss: { ...CORE_LOSS_DEFAULTS }
       },
       backPlate: { enabled: true, mu_r: 20, thickness_mm: 4, gapBelowPcb_mm: 1,
@@ -164,6 +189,12 @@ export function normalizeSpec(input) {
   dr.dualSided = rt.dualSided === undefined ? dr.dualSided : !!rt.dualSided;
   dr.poleSkew_deg = num(rt.poleSkew_deg, dr.poleSkew_deg);
   dr.poleShape = shapeProfile(rt.poleShape, "design.rotor.poleShape", warnings);
+  dr.poleCurve = poleCurveSpec(rt.poleCurve, warnings);
+  dr.poleLoft = poleLoftSpec(rt.poleLoft, warnings);
+  if (dr.poleLoft && !dr.poleCurve) {
+    warnings.push("design.rotor.poleLoft: a loft sweeps a traced footprint, and there is no design.rotor.poleCurve to sweep; ignored.");
+    dr.poleLoft = null;
+  }
   dr.density_kg_m3 = clampMin(rt.density_kg_m3, 0, dr.density_kg_m3);
   const cl = rt.coreLoss ?? {};
   dr.coreLoss.specificLoss_W_per_kg = clampMin(cl.specificLoss_W_per_kg, 0, dr.coreLoss.specificLoss_W_per_kg);
@@ -222,6 +253,44 @@ export function normalizeSpec(input) {
  * A profile with one row is a constant-width arc and is accepted; a row wider than the pitch is
  * not, because neighbouring wedges would then intersect — two coils shorted together, or a rotor
  * with no gap between poles. That is a design error worth a message rather than a mesh. */
+/* A traced footprint, checked by building it. Authoring errors come back as warnings naming the
+ * field and what would fix it, and the design falls back to its arc rather than failing to load —
+ * the same contract every other malformed field in here gets. */
+function poleCurveSpec(v, warnings) {
+  if (v == null) return null;
+  try {
+    const curve = footprintCurve(v, "design.rotor.poleCurve");
+    const insp = inspectSolid(tracedSolid({ name: "poleCurve", r0: 1, r1: 2, z0: 0, z1: 1 },
+                                          { count: 8, curve }));
+    if (!insp.withinDeclaredRadii)
+      warnings.push("design.rotor.poleCurve: the footprint reaches outside the 0..1 radial range, so the pole overhangs the rotor annulus it is measured in. An interpolating curve overshoots its own points slightly, which is the usual cause. Meshed as drawn either way.");
+    if (insp.overlaps)
+      warnings.push(`design.rotor.poleCurve: the footprint is wider than its own pole pitch (|v| past 0.5), so neighbouring poles run into each other. Narrow it or use fewer poles.`);
+    return { ...v, chordTolerance_mm: clampMin(v.chordTolerance_mm, 1e-4, DEFAULT_CHORD_TOLERANCE_MM) };
+  } catch (e) {
+    warnings.push(`${e.message}; the pole falls back to its arc.`);
+    return null;
+  }
+}
+
+function poleLoftSpec(v, warnings) {
+  if (v == null) return null;
+  const known = ["scale", "widen", "twist", "shift", "pivot"];
+  const bad = Object.keys(v).filter(k => !known.includes(k));
+  if (bad.length) warnings.push(`design.rotor.poleLoft: no channel named ${bad.join(", ")}; the channels are ${known.join(", ")}.`);
+  const out = {};
+  for (const k of known) {
+    if (v[k] === undefined || v[k] === null) continue;
+    const list = (Array.isArray(v[k]) ? v[k] : [v[k]]).map(Number);
+    if (!list.length || !list.every(Number.isFinite)) {
+      warnings.push(`design.rotor.poleLoft.${k}: not a number or a list of numbers; ignored.`);
+      continue;
+    }
+    out[k] = k === "pivot" ? list[0] : list;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 function shapeProfile(v, path, warnings) {
   const rows = Array.isArray(v) ? v : Array.isArray(v?.profile) ? v.profile : null;
   if (v == null) return null;
@@ -306,7 +375,7 @@ export function specToParams(spec) {
     coilCount: st.coilCount, phasePattern: st.phasePattern, coilSense: st.coilSense,
     coilSpan: st.coilSpanFraction, coilSkew: st.coilSkew_deg, coilShape: st.coilShape,
     coilSideSegments: PCB.coilSideSegments,
-    poleShape: rt.poleShape,
+    poleShape: rt.poleShape, poleCurve: rt.poleCurve, poleLoft: rt.poleLoft,
     gap: rt.airGap_mm, murRot: rt.mu_r, tooth: rt.poleHeight_mm, yoke: rt.yokeThickness_mm, arc: rt.poleArcFraction,
     dual: rt.dualSided, skew: rt.poleSkew_deg, rotorRho: rt.density_kg_m3, coreLoss: rt.coreLoss,
     back: bp.enabled, murBack: bp.mu_r, backT: bp.thickness_mm, backGap: bp.gapBelowPcb_mm, backRho: bp.density_kg_m3,
