@@ -23,9 +23,29 @@
 }}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.45}
-header{padding:16px 20px 10px;border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap}
-h1{font-size:19px;margin:0;font-weight:600;letter-spacing:-.01em}
-h1 small{font-weight:400;color:var(--muted);font-size:13px;margin-left:8px}
+header{padding:14px 20px 12px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
+h1{font-size:20px;margin:0;font-weight:600;letter-spacing:-.01em}
+/* The brand bar, same mark and same link target as the solver page: one project, two pages. */
+.bar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.brand{display:inline-flex;align-items:center}
+.brand img{height:34px;width:auto;display:block}
+.brand:focus-visible{outline:2px solid var(--gpu);outline-offset:4px;border-radius:4px}
+@media (max-width:760px){.brand img{height:28px}}
+.back{color:var(--muted);text-decoration:none;font-size:13px;white-space:nowrap}
+.back:hover{color:var(--ink)}
+.lede{margin:0;color:var(--muted);font-size:14px;max-width:96ch}
+.pick{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.rootline{font:12px ui-monospace,monospace;color:var(--muted)}
+/* Shown only when nothing is mounted — which is every visitor to the hosted copy, since the runs
+   are on the machine that made them and never in the repository. */
+#empty{grid-column:1/-1;max-width:96ch;display:none}
+#empty.on{display:block}
+#empty h3{margin:0 0 8px;font-size:15px}
+#empty p{margin:0 0 10px}
+#empty ol{margin:0 0 10px;padding-left:22px}
+#empty li{margin:4px 0}
+pre{font:12px/1.5 ui-monospace,monospace;background:var(--bg);border:1px solid var(--line);
+  border-radius:4px;padding:9px 11px;overflow-x:auto;margin:0 0 10px}
 main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16px 20px 40px;align-items:start}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px}
 canvas{display:block;width:100%;background:transparent}
@@ -60,7 +80,7 @@ code{font:12px ui-monospace,monospace;background:var(--bg);padding:1px 4px;borde
 /* ?frames=1 strips the chrome and leaves the frame: the shape on the left, the numbers that make it
    evidence on the right. The metrics panel stays, because a movie of shapes with no numbers is a
    screensaver. */
-body.frames header,body.frames footer,body.frames .controls,body.frames #trace{display:none}
+body.frames header,body.frames footer,body.frames #empty,body.frames .controls,body.frames #trace{display:none}
 body.frames main{padding:14px;gap:14px;height:100vh;align-items:stretch}
 body.frames .panel{display:flex;flex-direction:column}
 body.frames .stage{flex:1;grid-template-columns:minmax(0,1fr) 260px;grid-template-rows:minmax(0,1fr);min-height:0}
@@ -73,14 +93,50 @@ body.frames .vecblock{display:none}
 </head>
 <body>
 <header>
-  <h1>Optimization runs <small>archives are read from <span id="root">…</span></small></h1>
-  <select id="runs" style="min-width:min(46ch,60vw)"></select>
-  <button id="reload">reload</button>
-  <span id="status"></span>
+  <div class="bar">
+    <a class="brand" href="https://greylabs86.com" title="Grey Labs">
+      <img src="./GreylabsLogo.png" alt="Grey Labs" width="1411" height="562">
+    </a>
+    <a class="back" href="./index.html">&larr; back to the field solver</a>
+  </div>
+  <h1>Optimization runs</h1>
+  <p class="lede">A reader for optimization archives: every rotor the search tried, in the order it
+  tried them, with the score and the gates that judged each one. Nothing here solves &mdash; each
+  outline is redrawn from its own saved design &mdash; so a whole night scrubs like video. Runs are
+  written by <code>cli/study.js</code> on your own machine and stay there; this page reads them.</p>
+  <div class="pick">
+    <select id="runs" style="min-width:min(46ch,60vw)"></select>
+    <button id="reload">reload</button>
+    <span id="status"></span>
+    <span class="rootline">reading <span id="root">&hellip;</span></span>
+  </div>
 </header>
 
 <main>
-  <section class="panel">
+  <section class="panel" id="empty">
+    <h3>No runs are mounted here</h3>
+    <p>That is expected on the hosted copy of this site. An optimization run is gigabytes of your own
+    search history, so it is never committed to the repository and never published &mdash; it lives in
+    a folder next to your checkout. This page is the viewer; you supply the runs.</p>
+    <ol>
+      <li>Clone the project and install the two dev dependencies:
+        <pre>git clone https://github.com/a19grey/Axial_flow_Web_Simulator
+cd Axial_flow_Web_Simulator &amp;&amp; npm install</pre></li>
+      <li>Run a study. It is resumable and unattended &mdash; stop it and re-run with
+        <code>--resume</code> and it picks up with every finished evaluation still cached:
+        <pre>node cli/study.js run studies/printed-rotor-shape.json --hours 8</pre></li>
+      <li>Start the local server and come back to this page. It mounts your runs folder
+        (<code>../axialflow-runs/</code>, or <code>$AXIALFLOW_RUNS</code>) at <code>/runs/</code>:
+        <pre>npm start</pre></li>
+    </ol>
+    <p>Then flip through with the arrow keys, or render the whole night to a movie with
+    <code>node cli/frames.js &lt;run-dir&gt; --video</code>. The archive format, the ledger and the
+    <code>jq</code> queries that answer questions about a run are written up in
+    <code>docs/runs.md</code>. Meanwhile the
+    <a href="./index.html">field solver itself</a> runs entirely in this browser and needs none of
+    the above.</p>
+  </section>
+  <section class="panel" id="viewer">
     <div id="headline"></div>
     <div class="stage">
       <canvas id="plan" title="looking down the shaft"></canvas>
@@ -115,7 +171,11 @@ body.frames .vecblock{display:none}
 </main>
 
 <footer>
-  <p>Arrow keys step, space plays. <b>Improvements only</b> is the storyboard — one design per time the
+  <p><span>&copy; 2026 Alex Krause, PhD</span> &middot;
+  <span>A <a href="https://greylabs86.com">Grey Labs</a> project</span> &middot;
+  <span><a href="https://github.com/a19grey/Axial_flow_Web_Simulator">Source on GitHub</a></span> &middot;
+  <span><a href="./index.html">Field solver</a></span></p>
+  <p id="hint">Arrow keys step, space plays. <b>Improvements only</b> is the storyboard — one design per time the
   score got better, in order — and is what <code>cli/frames.js</code> renders into a frame sequence:
   <code>node cli/frames.js &lt;run-dir&gt; --fps 6</code>, then the <code>ffmpeg</code> line it prints.
   Nothing on this page solves anything; each outline is drawn from the design's own spec through the

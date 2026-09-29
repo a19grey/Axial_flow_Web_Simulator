@@ -352,6 +352,12 @@ function step(n) { state.index = Math.max(0, Math.min(state.view.length - 1, sta
 async function boot() {
   const { root, runs } = await listRuns();
   $("#root").textContent = root;
+  /* Someone arriving at the hosted copy has no runs folder and no reason to know that. Rather than
+   * an empty dropdown over an empty canvas, hand them the three commands that produce one. */
+  if (!runs.length) {
+    $("#empty").classList.add("on");
+    for (const sel of ["#viewer", "aside", "#hint"]) { const el = $(sel); if (el) el.style.display = "none"; }
+  }
   $("#runs").innerHTML = runs.length
     ? runs.map(r => `<option value="${r.runId}">${r.runId} — ${r.study || "?"} — best ${fmt(r.best)} (${r.status || "?"})</option>`).join("")
     : `<option value="">no runs found</option>`;
