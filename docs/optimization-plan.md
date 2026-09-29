@@ -147,12 +147,41 @@ default is what the search will actually chase.
 | no `error`-level quality flag | an unresolved gap or a missing stress surface is not a low score, it is not a measurement |
 | `torqueSurfaceSpread_pct` over threshold | the design's own numerical error bar says the number is not worth ranking |
 | manufacturability | trace width and pitch from the PCB process class, minimum printed feature for the rotor, coils that clear each other at every radius (already checked) |
+| containment | the geometry is where it is allowed to be: inside `design.rotor.poleBounds`, and clear of its own neighbour |
 
 **Reported beside the score, and available as optional constraints, but not gates by default:**
 `ripple_pct` and `peakBInMagneticParts_mT`. Ripple is a real trade rather than a disqualification, and a
 threshold on it is most useful *swept* — that sweep is what draws the Pareto front. The saturation ceiling
 is left off because linear mu_r is the current model's honest boundary either way and clamping it silently
 would hide that; it is flagged in the report and becomes a gate when P3 lands.
+
+### Containment, and why it is a gate rather than a bound
+
+*Added 2026-09-28, after the first overnight run found the hole in about four hours.*
+
+The design vector is bounded, and for a while that was mistaken for the geometry being bounded. It is
+not. Control points live in normalized wedge coordinates where u runs 0 at the rotor bore to 1 at its
+rim, so a footprint drawn from the box is inside the rotor by construction — but the **loft is applied
+afterwards**. `scale` grows the outline about its pivot and `widen` fans it angularly, so a vector well
+inside its own box describes a pole reaching past the rim, or lying across its neighbour.
+
+The first run's winner did both: it reached **57.9 mm** against a 52 mm stator and **spanned 66 degrees
+against a 45 degree pole pitch**, so adjacent poles interpenetrated and the rasterizer's coverage clamp
+quietly merged them. The torque was real — flux does not care that the iron is in the wrong place — and
+the design was worthless. Radius past the stator is not free: the honest way to use it is to build a
+bigger stator, which would use it far better. And eight poles merged into a ring are not the eight-pole
+machine the spec claims.
+
+It is a gate and not a box bound because the constraint couples variables the box cannot see: whether a
+given `scale` overruns depends on where the control points already are. Bounding `scale` tightly enough
+to be safe for every footprint would forbid flares that are legal for most of them. So the box stays
+generous, the gate is exact, and the study's declared ranges are then *tuned against the measured
+feasible fraction* — 13 % at the ranges the first run used, 86 % after, with the gate unchanged.
+
+The check costs no solve. `inspectRegions` builds the solids and integrates their outlines in closed
+form, so a breach is rejected before the design is ever meshed. `design.rotor.poleBounds` carries the
+limit, absent radii mean the rotor annulus itself (so the check is always live rather than opt-in), and
+a study pins the usual tightening — the stator's own outer radius — through its `overrides` block.
 
 Weighted-sum scalarizations hide exactly the trade-offs one wants to see. Everything that is not the primary
 objective is a constraint, and the sweep over a constraint's threshold is what produces the Pareto picture.

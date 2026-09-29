@@ -158,11 +158,62 @@ export function solidProvenance(s) {
            chordTolerance_mm: tol, polygonPoints: points, volumeError_pct: worst * 100 };
 }
 
+/* Where a solid is *allowed* to be, which need not be the annulus it is measured in.
+ *
+ * r0..r1 define the u mapping of a traced footprint; they are not a clip. A loft `scale` past 1
+ * grows the outline about its pivot and `widen` fans it angularly, so a search bounded only in
+ * control-point space can still hand back a pole that reaches past the rotor rim or runs into its
+ * neighbour — a shape that meshes, solves and scores perfectly well, and that nobody can build.
+ * A rotor may also want a tighter limit than its own rim: staying inside the stator's outer radius
+ * is usually the right rule, because iron that overhangs the copper is iron doing nothing while
+ * the stator could have been made that much bigger instead.
+ *
+ * So bounds are separate from the annulus, and absent bounds *are* the annulus, which means the
+ * check is always live rather than opt-in.
+ */
+export function solidContainment(s) {
+  const half = solidAngularHalf(s);
+  const [rLo, rHi] = solidRadialExtent(s);
+  const pitch = s.footprint ? s.footprint.pitch : s.arc ? 2 * Math.PI / s.arc.count : 2 * Math.PI;
+  const b = s.bounds || {};
+  // `+null` is 0 and Number.isFinite(0) is true, so an absent bound has to be tested for absence
+  // before it is coerced — otherwise "no limit" silently becomes "a limit of zero".
+  const given = v => v !== null && v !== undefined && v !== "" && Number.isFinite(+v);
+  const minRadius_mm = given(b.minRadius_mm) ? +b.minRadius_mm : s.r0;
+  const maxRadius_mm = given(b.maxRadius_mm) ? +b.maxRadius_mm : s.r1;
+  const maxPitchFraction = given(b.maxPitchFraction) ? +b.maxPitchFraction : 1;
+  const pitchFraction = 2 * half / pitch;
+  const overRim_mm = Math.max(0, rHi - maxRadius_mm), underBore_mm = Math.max(0, minRadius_mm - rLo);
+  const withinRadii = overRim_mm <= 1e-9 && underBore_mm <= 1e-9;
+  const clearsNeighbour = pitchFraction <= maxPitchFraction + 1e-12;
+  return {
+    minRadius_mm, maxRadius_mm, maxPitchFraction,
+    reaches_mm: [rLo, rHi], pitchFraction,
+    overRim_mm, underBore_mm, withinRadii, clearsNeighbour,
+    ok: withinRadii && clearsNeighbour
+  };
+}
+
+/* The breach in one sentence, naming what went over and by how much. Written once here so the
+ * spec's load warnings, plan()'s notes and the optimizer's gate all say the same thing. */
+export function containmentReason(name, c) {
+  const bits = [];
+  if (c.overRim_mm > 1e-9) bits.push(
+    `reaches ${c.reaches_mm[1].toFixed(2)} mm, ${c.overRim_mm.toFixed(2)} mm past the ${c.maxRadius_mm.toFixed(2)} mm it is allowed`);
+  if (c.underBore_mm > 1e-9) bits.push(
+    `reaches in to ${c.reaches_mm[0].toFixed(2)} mm, ${c.underBore_mm.toFixed(2)} mm inside the ${c.minRadius_mm.toFixed(2)} mm bore it is allowed`);
+  if (!c.clearsNeighbour) bits.push(
+    `spans ${(c.pitchFraction * 100).toFixed(1)} % of its own pole pitch, past the ` +
+    `${(c.maxPitchFraction * 100).toFixed(0)} % that keeps it clear of its neighbour`);
+  return bits.length ? `${name} ${bits.join(", and ")}` : null;
+}
+
 /* Everything a validator or an optimizer's feasibility gate wants, with no mesh and no solve. */
 export function inspectSolid(s) {
   const half = solidAngularHalf(s);
   const [rLo, rHi] = solidRadialExtent(s);
   const pitch = s.footprint ? s.footprint.pitch : s.arc ? 2 * Math.PI / s.arc.count : 2 * Math.PI;
+  const containment = solidContainment(s);
   return {
     name: s.name, group: s.group,
     volume_mm3: solidVolume(s), stations: solidStations(s),
@@ -170,6 +221,7 @@ export function inspectSolid(s) {
     clearance_deg: (pitch - 2 * half) * 180 / Math.PI,
     overlaps: 2 * half > pitch + 1e-12,
     withinDeclaredRadii: rLo >= s.r0 - 1e-9 && rHi <= s.r1 + 1e-9,
+    containment, containmentReason: containmentReason(s.name, containment),
     provenance: solidProvenance(s)
   };
 }

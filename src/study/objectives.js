@@ -23,6 +23,8 @@
  */
 
 import { evalExpr, dependencies, ExprError } from "../core/expr.js";
+import { specToParams } from "../core/spec.js";
+import { inspectRegions } from "../core/geometry.js";
 
 /* Fab and printer limits. Defaults are a common 4-layer process class and a 0.4 mm nozzle, and
  * every one of them is a study-spec field, because the point of the gate is that it describes the
@@ -169,13 +171,53 @@ export function manufacturability(spec, processIn = {}) {
 
 /* Every gate, evaluated. `spec`-only gates run first so a design can be rejected before it costs a
  * solve; `record` may be null in that case. */
+/* ---- containment ------------------------------------------------------------------------------ */
+
+/* Does the geometry stay where it is allowed to be?
+ *
+ * This is the gate that the first overnight run did without, and the search found the hole in
+ * about four hours: the winning rotor grew scythes reaching 5.9 mm past the stator's outer radius
+ * and spanning 66 degrees against a 45 degree pole pitch, so neighbouring poles interpenetrated.
+ * Both are real torque — flux does not care that the iron is in the wrong place — and both are
+ * cheating, because the honest way to use radius past the stator is to build a bigger stator, and
+ * two poles merged into one are not the eight-pole machine the spec claims.
+ *
+ * It costs no solve: `inspectRegions` builds the solids and integrates their outlines in closed
+ * form, so this runs *before* the design is meshed and rejects it for free. It reads the bounds
+ * off the spec rather than inventing them, so the same call answers for a hand-authored design in
+ * the UI and for a design a search just proposed.
+ */
+export function containment(spec) {
+  const fails = [];
+  let worst = 0;
+  try {
+    for (const s of inspectRegions(specToParams(spec))) {
+      const c = s.containment;
+      if (!c || c.ok) continue;
+      fails.push(s.containmentReason);
+      worst = Math.max(worst, c.overRim_mm, c.underBore_mm);
+    }
+  } catch (e) {
+    /* A geometry that will not even build is not contained, and saying so here keeps the caller
+     * from discovering it two stages later inside a mesher. */
+    return { pass: false, fails: [`the geometry could not be built: ${e.message}`], overrun_mm: null };
+  }
+  return { pass: fails.length === 0, fails, overrun_mm: worst };
+}
+
 export function gateDesign(spec, record, objSpec = {}) {
   const o = { ...OBJECTIVE_DEFAULTS, ...objSpec };
   const gates = [];
 
   const man = manufacturability(spec, o.process);
   gates.push({ name: "manufacturability", pass: man.pass, detail: man.fails.join("; ") || null, unchecked: man.unchecked.length ? man.unchecked : undefined });
-  if (!record) return { gates, feasible: gates.every(g => g.pass), needsSolve: man.pass };
+
+  /* Both of these are spec-only, so a design that fails them never reaches a mesh. */
+  const con = containment(spec);
+  gates.push({ name: "containment", pass: con.pass, value: con.overrun_mm, detail: con.fails.join("; ") || null });
+
+  const needsSolve = man.pass && con.pass;
+  if (!record) return { gates, feasible: gates.every(g => g.pass), needsSolve };
 
   const r = record.results || {};
   const errs = (r.quality || []).filter(f => f.level === "error");
@@ -214,7 +256,7 @@ export function gateDesign(spec, record, objSpec = {}) {
     gates.push({ name: c.name || String(c.expr), pass, value, detail });
   }
 
-  return { gates, feasible: gates.every(g => g.pass), needsSolve: man.pass };
+  return { gates, feasible: gates.every(g => g.pass), needsSolve };
 }
 
 /* ---- the score -------------------------------------------------------------------------------- */

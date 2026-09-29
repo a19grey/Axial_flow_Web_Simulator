@@ -232,13 +232,16 @@ export function motorRegions(p) {
                             loft: traced.loft, flip, tolerance_mm: traced.tolerance_mm })
     : wedgeSolid({ ...fields, arc: poleArc });
 
-  R.push(pole({ name: "rotorPoles", mu_r: p.murRot, rho: p.rotorRho, group: "rotorTop",
+  /* The pole is the only region whose outline is authored rather than derived, so it is the only
+   * one that can be drawn outside the disc it belongs to. Its bounds ride with it. */
+  const bounds = p.poleBounds || null;
+  R.push(pole({ name: "rotorPoles", mu_r: p.murRot, rho: p.rotorRho, group: "rotorTop", bounds,
                 r0: g.Rri, r1: g.Rro, z0: g.zTB, z1: g.zTT }, false));
   R.push(wedgeSolid({ name: "rotorYoke", mu_r: p.murRot, rho: p.rotorRho, group: "rotorTop",
                       r0: g.Rri, r1: g.Rro, z0: g.zTT, z1: g.zYT, arc: full }));
 
   if (g.dual) {
-    R.push(pole({ name: "rotorPolesLower", mu_r: p.murRot, rho: p.rotorRho, group: "rotorBottom",
+    R.push(pole({ name: "rotorPolesLower", mu_r: p.murRot, rho: p.rotorRho, group: "rotorBottom", bounds,
                   r0: g.Rri, r1: g.Rro, z0: g.zMT, z1: g.zMB }, true));
     R.push(wedgeSolid({ name: "rotorYokeLower", mu_r: p.murRot, rho: p.rotorRho, group: "rotorBottom",
                         r0: g.Rri, r1: g.Rro, z0: g.zMY, z1: g.zMT, arc: full }));

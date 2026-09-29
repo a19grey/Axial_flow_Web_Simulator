@@ -22,7 +22,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { phaseCoefficients, optimalPhase, torqueAt } from "../src/study/operatingPoint.js";
-import { scopeOf, scoreDesign, manufacturability, checkExpressions } from "../src/study/objectives.js";
+import { scopeOf, scoreDesign, manufacturability, checkExpressions, containment, gateDesign } from "../src/study/objectives.js";
 import { compileDesign, discreteCombinations } from "../src/study/design.js";
 import { twoChainVariable, loftVariable, ladderStep, inspectShape } from "../src/study/shape.js";
 import { latinHypercube, haltonStream, screenPoints, screenRanking, rng } from "../src/study/sample.js";
@@ -163,14 +163,68 @@ function variables() {
   /* The measurement the parameterization exists for: how often a draw from the box is a design
    * worth solving. The two-chain layout cannot cross itself whatever it is handed, which is why the
    * low rungs use it; the number is asserted rather than asserted-about. */
-  let simple = 0, N = 500;
+  let simple = 0, valid = 0, N = 500;
   const R = rng(99);
   for (let i = 0; i < N; i++) {
     const x = d.bounds.map(([lo, hi]) => lo + R() * (hi - lo));
-    if (d.validate(x).ok) simple++;
+    const v = d.validate(x);
+    if (v.ok) valid++;
+    if (!/crosses itself/.test(v.reason || "")) simple++;
   }
-  ok("every uniform draw from the two-chain box is a valid footprint", simple === N, `${simple}/${N}`);
-  report.cases.boxFeasibility = { draws: N, valid: simple };
+  ok("every uniform draw from the two-chain box is a simple outline", simple === N, `${simple}/${N}`);
+
+  /* Simple is not the same as legal, and conflating the two is how the first overnight run ended
+   * up with poles hanging 5 mm past the stator. The footprint's own box keeps it in the annulus;
+   * the loft is applied afterwards and can take it straight back out, so the same draws with the
+   * loft pinned neutral must be 100 % valid and with the loft free must not be. */
+  const flat = compileDesign([{ kind: "footprint", name: "pole", stations: 4 }], base);
+  const R2 = rng(99);
+  let flatValid = 0;
+  for (let i = 0; i < N; i++) flatValid += flat.validate(flat.bounds.map(([lo, hi]) => lo + R2() * (hi - lo))).ok ? 1 : 0;
+  ok("with no loft, every one of them is also inside the rotor it belongs to", flatValid === N, `${flatValid}/${N}`);
+  ok("with a loft free to scale past 1, some are not, and that is the containment check working",
+     valid < N, `${valid}/${N} survive once the loft is applied`);
+  report.cases.boxFeasibility = { draws: N, simple, valid, validWithoutLoft: flatValid };
+}
+
+/* ---- 3b. containment ----------------------------------------------------------------------------- */
+
+/* The gate the first overnight study did without. It found the hole in four hours: the winning
+ * rotor grew scythes reaching 5.9 mm past the stator's outer radius and spanning 66 degrees
+ * against a 45 degree pole pitch, so neighbouring poles interpenetrated. Real torque, and cheating.
+ */
+function containmentGate() {
+  const base = normalizeSpec(defaultSpec()).spec;
+  ok("a stock design is inside the rotor it is drawn on", containment(base).pass);
+
+  const ro = base.design.stator.outerRadius_mm;
+  const over = normalizeSpec({ ...base, design: { ...base.design, rotor: { ...base.design.rotor,
+    poleCurve: { trailing: [-0.25, -0.25, -0.25], leading: [0.25, 0.25, 0.25], u0: 0.1, u1: 0.9 },
+    poleLoft: { scale: [1, 1.6], widen: [1, 1], pivot: 0.5 } } } }).spec;
+  const c = containment(over);
+  ok("a loft that scales past 1 pushes the pole off the rim, and is caught", !c.pass && c.overrun_mm > 0.5,
+     c.fails.join("; "));
+  ok("and it is caught before anything is meshed or solved",
+     gateDesign(over, null).needsSolve === false &&
+     gateDesign(over, null).gates.some(g => g.name === "containment" && !g.pass));
+
+  const wide = normalizeSpec({ ...base, design: { ...base.design, rotor: { ...base.design.rotor,
+    poleCurve: { trailing: [-0.4, -0.4], leading: [0.4, 0.4], u0: 0.2, u1: 0.8 },
+    poleLoft: { widen: [1, 1.4], pivot: 0.5 } } } }).spec;
+  ok("a widen that fans the pole across its neighbour is caught too",
+     !containment(wide).pass && /pole pitch/.test(containment(wide).fails.join(" ")));
+
+  /* The bound is a design field, so a study can be stricter than the geometry is. */
+  const tight = normalizeSpec({ ...base, design: { ...base.design, rotor: { ...base.design.rotor,
+    poleBounds: { maxRadius_mm: ro - 3 } } } }).spec;
+  ok("tightening maxRadius_mm to inside the stator rejects a pole the rotor itself would allow",
+     containment(base).pass && !containment(tight).pass);
+
+  /* `+null` is 0. A bound of null that survives one normalization and becomes a bound of zero on
+   * the next would reject every design in the study, one round-trip through the archive later. */
+  const twice = normalizeSpec(normalizeSpec(base).spec).spec;
+  ok("an absent bound stays absent when a spec is normalized twice",
+     twice.design.rotor.poleBounds.maxRadius_mm === null && containment(twice).pass);
 }
 
 /* ---- 4. the ladder is exact ---------------------------------------------------------------------- */
@@ -414,6 +468,7 @@ osMod = await import("node:os");
 process.stderr.write("\n1. the quadratic form, against its own definition\n"); quadraticForm();
 process.stderr.write("\n2. gates and the score\n"); gates();
 process.stderr.write("\n3. design variables\n"); variables();
+process.stderr.write("\n3b. containment\n"); containmentGate();
 process.stderr.write("\n4. the shape ladder\n"); ladder();
 process.stderr.write("\n5. samplers and searchers\n"); await searchers();
 process.stderr.write("\n6. the run archive\n"); archive();

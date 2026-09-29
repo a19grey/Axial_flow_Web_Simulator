@@ -102,6 +102,15 @@ export function defaultSpec() {
          * it radially, twist swings its centre line (poleSkew_deg generalized), shift slides it
          * radially. On a dual-sided machine the schedule runs from each rotor's own gap face. */
         poleLoft: null,
+        /* Where the pole is allowed to be, as opposed to where its u coordinate is measured from.
+         * A loft `scale` past 1 grows the footprint about its pivot and `widen` fans it angularly,
+         * so a traced pole can perfectly legally be drawn reaching past the rotor rim or across
+         * into its neighbour. That shape meshes, solves and reports a torque; it is simply not a
+         * machine. Null radii mean the rotor annulus itself, so the check is always live;
+         * maxRadius_mm set to the stator's outer radius is the usual tightening, because iron that
+         * overhangs the copper is iron doing nothing. maxPitchFraction 1 lets neighbouring poles
+         * touch and no more. */
+        poleBounds: { maxRadius_mm: null, minRadius_mm: null, maxPitchFraction: 1 },
         coreLoss: { ...CORE_LOSS_DEFAULTS }
       },
       backPlate: { enabled: true, mu_r: 20, thickness_mm: 4, gapBelowPcb_mm: 1,
@@ -195,6 +204,16 @@ export function normalizeSpec(input) {
     warnings.push("design.rotor.poleLoft: a loft sweeps a traced footprint, and there is no design.rotor.poleCurve to sweep; ignored.");
     dr.poleLoft = null;
   }
+  /* A radius bound is optional, and "absent" has to be tested before the value is coerced: `+null`
+   * is 0, so the lazy form would turn "no limit" into "a limit of zero" the second time a spec was
+   * normalized — which is every time one round-trips through the archive. */
+  const pb = rt.poleBounds ?? {};
+  const bound = v => (v === null || v === undefined || v === "" || !Number.isFinite(+v)) ? null : +v;
+  dr.poleBounds = {
+    maxRadius_mm: bound(pb.maxRadius_mm),
+    minRadius_mm: bound(pb.minRadius_mm),
+    maxPitchFraction: Math.min(2, Math.max(0.01, num(pb.maxPitchFraction, 1)))
+  };
   dr.density_kg_m3 = clampMin(rt.density_kg_m3, 0, dr.density_kg_m3);
   const cl = rt.coreLoss ?? {};
   dr.coreLoss.specificLoss_W_per_kg = clampMin(cl.specificLoss_W_per_kg, 0, dr.coreLoss.specificLoss_W_per_kg);
@@ -375,7 +394,7 @@ export function specToParams(spec) {
     coilCount: st.coilCount, phasePattern: st.phasePattern, coilSense: st.coilSense,
     coilSpan: st.coilSpanFraction, coilSkew: st.coilSkew_deg, coilShape: st.coilShape,
     coilSideSegments: PCB.coilSideSegments,
-    poleShape: rt.poleShape, poleCurve: rt.poleCurve, poleLoft: rt.poleLoft,
+    poleShape: rt.poleShape, poleCurve: rt.poleCurve, poleLoft: rt.poleLoft, poleBounds: rt.poleBounds,
     gap: rt.airGap_mm, murRot: rt.mu_r, tooth: rt.poleHeight_mm, yoke: rt.yokeThickness_mm, arc: rt.poleArcFraction,
     dual: rt.dualSided, skew: rt.poleSkew_deg, rotorRho: rt.density_kg_m3, coreLoss: rt.coreLoss,
     back: bp.enabled, murBack: bp.mu_r, backT: bp.thickness_mm, backGap: bp.gapBelowPcb_mm, backRho: bp.density_kg_m3,

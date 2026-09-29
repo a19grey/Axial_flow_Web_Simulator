@@ -124,7 +124,9 @@ export function loftVariable(decl) {
  * where legality comes from locality instead — the search is perturbing a shape already known to be
  * simple — it is the gate that keeps a self-crossing outline out of the rasterizer, where it would
  * produce a plausible and wrong permeability rather than an error. */
-export function inspectShape(variable, x, { r0 = 1, r1 = 2, count = 8, loft = null, tolerance_mm = 0.05 } = {}) {
+export function inspectShape(variable, x, { r0 = 1, r1 = 2, count = 8, loft = null,
+                                            tolerance_mm = 0.05, uRange = [0, 1],
+                                            maxPitchFraction = 1 } = {}) {
   let curve;
   try { curve = variable.curve(x); }
   catch (e) { return { ok: false, reason: e.message }; }
@@ -132,7 +134,16 @@ export function inspectShape(variable, x, { r0 = 1, r1 = 2, count = 8, loft = nu
   const insp = inspectCurve(curve, frame, { loft, tolerance_mm });
   const reasons = [];
   if (!insp.simple) reasons.push("the outline crosses itself");
-  if (insp.overlaps) reasons.push("the footprint is wider than its own pitch, so neighbouring copies collide");
+  /* The control points are bounded, but the loft is applied *after* them: `widen` fans the outline
+   * angularly and `scale` grows it radially about the pivot, so a vector well inside its own box
+   * can still describe a pole lying across its neighbour or hanging off the rim. These two read
+   * the extents `inspectCurve` measured with the loft already applied, which is the only place the
+   * question can be answered honestly. */
+  if (2 * insp.maxAbsV > maxPitchFraction + 1e-9) reasons.push(
+    `the footprint spans ${(200 * insp.maxAbsV).toFixed(0)} % of its own pole pitch, so neighbouring copies collide`);
+  if (insp.uMin < uRange[0] - 1e-9 || insp.uMax > uRange[1] + 1e-9) reasons.push(
+    `the footprint reaches ${insp.uMin.toFixed(3)}..${insp.uMax.toFixed(3)} of the annulus, outside the ` +
+    `${uRange[0]}..${uRange[1]} it is allowed, so the pole hangs off the rotor`);
   return { ok: reasons.length === 0, reason: reasons.join("; ") || null, inspection: insp };
 }
 

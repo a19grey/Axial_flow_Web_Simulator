@@ -139,13 +139,25 @@ function drawPlan(canvas, spec) {
   if (!spec) return;
   const s = spec.design.stator, r = spec.design.rotor;
   const ri = s.innerRadius_mm, ro = s.outerRadius_mm;
-  const R = ro * 1.06;
+  /* The footprint's u runs over the *rotor* annulus, which overhangs the stator by a millimetre
+   * either side — the same Rri/Rro `motorRegions` builds the pole on. Drawing it against the
+   * stator's radii instead would put every outline in slightly the wrong place. */
+  const Rri = Math.max(1, ri - 1), Rro = ro + 1;
+  const limit = r.poleBounds && Number.isFinite(r.poleBounds.maxRadius_mm) ? r.poleBounds.maxRadius_mm : null;
+  /* Leave room outside the rim: a pole that breaks its bound is exactly the one worth seeing, and
+   * cropping it at the frame edge would hide the thing the picture is for. */
+  const R = Math.max(ro, Rro, limit || 0) * 1.12;
   const k = Math.min(w, h) / (2 * R), cx = w / 2, cy = h / 2;
   const X = (x, y) => [cx + k * x, cy - k * y];
 
   // The stator: the active annulus and the coil pitch, so the pole can be read against what it faces.
   g.strokeStyle = css("--line"); g.lineWidth = 1;
   for (const rad of [ri, ro]) { g.beginPath(); g.arc(cx, cy, k * rad, 0, 2 * Math.PI); g.stroke(); }
+  if (limit !== null) {
+    g.strokeStyle = css("--warn"); g.globalAlpha = 0.5; g.setLineDash([2, 4]);
+    g.beginPath(); g.arc(cx, cy, k * limit, 0, 2 * Math.PI); g.stroke();
+    g.setLineDash([]); g.globalAlpha = 1;
+  }
   const coils = s.coilCount || Math.round(1.5 * s.poles);
   g.strokeStyle = css("--gpu"); g.globalAlpha = 0.22;
   for (let i = 0; i < coils; i++) {
@@ -171,8 +183,8 @@ function drawPlan(canvas, spec) {
     for (let p = 0; p < poles; p++) {
       const centre = (p + 0.5) * 2 * Math.PI / poles;
       const pts = curve
-        ? tessellate(curve, curveFrame({ r0: ri, r1: ro, centre, count: poles }), { loft, s: sH, tolerance_mm: 0.05 }).points
-        : arcOutline(ri, ro, centre, 2 * Math.PI / poles * (r.poleArcFraction ?? 0.5));
+        ? tessellate(curve, curveFrame({ r0: Rri, r1: Rro, centre, count: poles }), { loft, s: sH, tolerance_mm: 0.05 }).points
+        : arcOutline(Rri, Rro, centre, 2 * Math.PI / poles * (r.poleArcFraction ?? 0.5));
       if (!pts || pts.length < 3) continue;
       g.beginPath();
       g.moveTo(...X(pts[0][0], pts[0][1]));

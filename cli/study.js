@@ -48,6 +48,8 @@ import { RunArchive, listRuns, runId, repairLedger, DEFAULT_RUNS_ROOT } from "./
 const DEFAULT_STUDY = {
   study: "untitled",
   baseline: null,
+  /* Spec fields the study pins before the search starts, deep-merged onto the baseline. */
+  overrides: null,
   seed: 1,
   objective: { ...OBJECTIVE_DEFAULTS },
   /* Mesh overrides per evaluation tier. The screening mesh is the whole reason a scan of a hundred
@@ -57,6 +59,16 @@ const DEFAULT_STUDY = {
   stages: [],
   budget: { evaluations: Infinity, hours: Infinity }
 };
+
+/* Deep merge, objects only: arrays and scalars replace wholesale, because a partial array is
+ * never what an override means. */
+function deepMerge(base, over) {
+  if (!over || typeof over !== "object" || Array.isArray(over)) return over === undefined ? base : over;
+  const out = Array.isArray(base) ? [...base] : { ...(base || {}) };
+  for (const [k, v] of Object.entries(over))
+    out[k] = v && typeof v === "object" && !Array.isArray(v) ? deepMerge(out[k], v) : v;
+  return out;
+}
 
 function loadStudy(path) {
   const raw = JSON.parse(readFileSync(path, "utf8"));
@@ -73,7 +85,11 @@ function loadStudy(path) {
     if (!existsSync(q)) throw new Error(`No such baseline spec: ${s.baseline}`);
     base = JSON.parse(readFileSync(q, "utf8"));
   }
-  s.baselineSpec = normalizeSpec(base).spec;
+  /* Constants the study imposes on the baseline before any variable moves: the containment bound
+   * is the motivating case, since "the rotor may not reach past the stator" is a property of the
+   * study's question rather than of the baseline machine, and expressing it as a design variable
+   * with one legal value would be a lie about what is being searched. */
+  s.baselineSpec = normalizeSpec(s.overrides ? deepMerge(base, s.overrides) : base).spec;
   return s;
 }
 
@@ -580,7 +596,11 @@ async function main() {
       bounds: design.bounds, x0: design.x0,
       discrete: discreteCombinations(design.discrete),
       stages: study.stages.map(s => s.kind),
-      gatesOnBaseline: gateDesign(study.baselineSpec, null, study.objective).gates
+      /* The gates on the design the study will actually start from, which is the baseline with the
+       * variables' own initial values stamped onto it — not the baseline spec as written. Those
+       * differ whenever a variable's `init` is not the baseline's value, and reporting the wrong
+       * one either invents a failure or hides a real one. */
+      gatesOnBaseline: gateDesign(design.apply(design.x0), null, study.objective).gates
     }, null, 2) + "\n");
     return;
   }
