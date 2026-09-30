@@ -1,0 +1,96 @@
+{
+  "format": "axial-flux-project",
+  "version": 2,
+  "name": "Apostrophe coils: a traced outline, wound by fill fraction",
+  "notes": "A stator whose coils are not wedges. design.stator.coilCurve is a closed curve through eight control points in normalized wedge coordinates - u runs 0 at the board's bore to 1 at its rim, v is the angle in units of the coil pitch - and it draws a comma: narrow and swung round at the inner radius, broad and square at the outer. No pair of angles draws that, which is why the wedge path cannot express it.\n\nThe turns inside it are routed rather than nested. Each turn is a level set of the distance to the outline, so consecutive turns are a full trace pitch apart everywhere by construction, and a turn that would pinch into two loops ends the winding instead of being drawn as a short.\n\nHow many turns there are is not stated anywhere in this file. turnsPerLayer is null, and fillFraction says to wind 80 % of the way into the room the outline actually has; the turn count falls out of those two. That is the point: every turn inward links less flux than the one outside it and adds its whole perimeter to the resistance, so at a fixed loss budget there is a depth past which the next turn makes the machine worse. Run AFS.plan() to see where this outline put it.",
+  "design": {
+    "stator": {
+      "poles": 4,
+      "copperLayers": 2,
+      "innerRadius_mm": 15,
+      "outerRadius_mm": 40,
+      "turnsPerLayer": null,
+      "peakCurrent_A": 5,
+      "thickness_mm": 1.6,
+      "tracePitch_mm": 0.5,
+      "traceWidth_mm": 0.34,
+      "edgeMargin_mm": 0.4,
+      "fillFraction": 0.8,
+      "coilCurve": {
+        "through": [
+          [
+            0.06,
+            -0.04
+          ],
+          [
+            0.35,
+            -0.24
+          ],
+          [
+            0.7,
+            -0.32
+          ],
+          [
+            0.96,
+            -0.28
+          ],
+          [
+            0.96,
+            0.3
+          ],
+          [
+            0.7,
+            0.36
+          ],
+          [
+            0.35,
+            0.16
+          ],
+          [
+            0.06,
+            0.24
+          ]
+        ],
+        "chordTolerance_mm": 0.002
+      }
+    },
+    "rotor": {
+      "airGap_mm": 3,
+      "mu_r": 20,
+      "poleHeight_mm": 3,
+      "yokeThickness_mm": 4,
+      "poleArcFraction": 0.5
+    },
+    "backPlate": {
+      "enabled": true,
+      "mu_r": 20,
+      "thickness_mm": 4,
+      "gapBelowPcb_mm": 1
+    }
+  },
+  "operatingPoint": {
+    "rotorAngle_deg": 0,
+    "currentAngle_elecDeg": 45
+  },
+  "mesh": {
+    "mode": "cylindrical",
+    "activeCellsAcrossDiameter": 160,
+    "cellsAcrossAirGap": 6,
+    "cellsAcrossPoleHeight": 4,
+    "cellsAcrossYoke": 3,
+    "cellsAcrossPcb": 4,
+    "cellsAcrossBackPlate": 3,
+    "cellsAcrossBackGap": 2,
+    "growthRatio": 1.2,
+    "farFieldCellFactor": 8,
+    "maxCells": 40000000,
+    "cellsAcrossPoleArc": 64,
+    "sector": true
+  },
+  "solver": {
+    "tolerance": 1e-05,
+    "maxIterations": 4000,
+    "checkInterval": 32,
+    "stallPatience": 6
+  }
+}

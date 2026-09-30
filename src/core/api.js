@@ -8,7 +8,7 @@
  */
 
 import { normalizeSpec, defaultSpec, specToParams, specHash, SPEC_VERSION, getPath, setPath } from "./spec.js";
-import { buildMotor, buildMesh, motorGeom, meshResolution , inspectRegions } from "./geometry.js";
+import { buildMotor, buildMesh, motorGeom, meshResolution , inspectRegions, windingPlan } from "./geometry.js";
 import { solveJob, phaseCurrents } from "./solve.js";
 import { motorMetrics } from "./torque.js";
 import { resultsSummary } from "./results.js";
@@ -103,11 +103,40 @@ export async function plan(specIn) {
       `worth ${s.provenance.volumeError_pct.toExponential(1)} % of its volume.`);
   }
 
+  /* The winding, which is now something plan() has to *find* rather than read off the spec: the
+   * turn count falls out of the outline and the fill fraction, and an author is entitled to know
+   * what those two came to before committing to a solve. */
+  let wind = null;
+  try {
+    const W = windingPlan(p);
+    wind = { footprint: W.mode, coils: W.coils, turnsPerCoil: W.turns, turnCap: W.cap,
+             fillFraction: W.fillFraction, depth_mm: +W.depth_mm.toFixed(4),
+             filled_mm: +W.filled_mm.toFixed(4), stopped: W.stopped, grid: W.grid || null };
+    if (W.turns < 1) notes.push(
+      `The coil outline holds no turns: it is ${W.depth_mm.toFixed(2)} mm deep at its widest, the first turn sits ` +
+      `${p.edge} mm in, and the fill fraction is ${W.fillFraction}. Widen the outline, cut design.stator.edgeMargin_mm, or raise design.stator.fillFraction.`);
+    else if (W.stopped === "split") notes.push(
+      `The winding stops ${W.filled_mm.toFixed(2)} mm in at ${W.turns} turns: past there the coil outline offsets into two ` +
+      `separate loops, so a further turn would be a short rather than a turn. The outline pinches somewhere — smooth it, or wind less deeply.`);
+    else if (W.stopped === "cap") notes.push(
+      `The winding stopped at design.stator.turnsPerLayer = ${W.cap} with ${(W.depth_mm - W.filled_mm).toFixed(2)} mm of room left. ` +
+      `Set it to null to let design.stator.fillFraction decide alone.`);
+    if (W.budgeted) notes.push(
+      `The coil outline hit its tessellation budget, so the shape the turns were routed from is coarser than ` +
+      `design.stator.coilCurve.chordTolerance_mm asked for. Loosen that tolerance or simplify the outline.`);
+    if (W.mode === "traced") notes.push(
+      `The coil is a traced outline, so its ${W.turns} turns are routed as true planar offsets on a ` +
+      `${W.grid.nx}x${W.grid.ny} distance field at ${W.grid.cell_mm.toFixed(3)} mm. Trace-to-trace clearance is ` +
+      `${(p.pitch - p.traceW).toFixed(3)} mm everywhere by construction, since two level sets of a distance ` +
+      `function are at least their level difference apart.`);
+  } catch (e) { notes.push(`The winding could not be routed: ${e.message}`); }
+
   return {
     specHash: specHash(spec),
     mesh: { ...meshStats(mesh), margin_mm: Math.max(p.marginMin, p.marginFactor * p.ro) },
     resolution_cells: res,
     solids,
+    winding: wind,
     memory: {
       totalDeviceBytes: mem.total,
       totalDeviceMB: +(mem.total / 1048576).toFixed(1),

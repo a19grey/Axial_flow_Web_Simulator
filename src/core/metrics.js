@@ -15,7 +15,7 @@
 
 import { MU0, MATERIALS } from "./constants.js";
 import { volumeM, CYLINDRICAL } from "./mesh.js";
-import { motorRegions, regionVolume, windingLayout } from "./geometry.js";
+import { motorRegions, regionVolume, windingLayout, windingPlan } from "./geometry.js";
 
 const MM3 = 1e-9;   // cubic millimetres -> cubic metres
 
@@ -31,6 +31,7 @@ const MM3 = 1e-9;   // cubic millimetres -> cubic metres
  */
 export function windingGeometry(job) {
   const p = job.p, { count } = windingLayout(p);
+  const W = job.winding || windingPlan(p);
   const perPhase = [0, 0, 0], turnsPerPhase = [0, 0, 0];
   for (const poly of job.polys) {
     const pts = poly.pts;
@@ -49,6 +50,15 @@ export function windingGeometry(job) {
     coils: count,
     coilsPerPhase: [0, 1, 2].map(j => windingLayout(p).phase.filter(x => x === j).length),
     turnsPerPhase,
+    /* How the winding was arrived at, not just what it came to. `turnsPerCoil` is an output now
+     * rather than an input, and `routingStopped` says which of the four ends it hit, which is the
+     * difference between a coil that is as full as it wants to be and one that ran out of room. */
+    turnsPerCoil: W.turns,
+    fillFraction: W.fillFraction,
+    windingDepth_mm: W.depth_mm,
+    filledDepth_mm: W.filled_mm,
+    routingStopped: W.stopped,
+    footprint: W.mode,
     conductorLength_m: perPhase.map(v => v * 1e-3),
     conductorArea_mm2: area_mm2,
     copperVolume_mm3: perPhase.reduce((a, b) => a + b, 0) * area_mm2,
@@ -260,6 +270,12 @@ export function derivedMetrics(sol) {
     winding: {
       coils: winding.coils,
       coilsPerPhase: winding.coilsPerPhase,
+      turnsPerCoil: winding.turnsPerCoil,
+      fillFraction: winding.fillFraction,
+      windingDepth_mm: winding.windingDepth_mm,
+      filledDepth_mm: winding.filledDepth_mm,
+      routingStopped: winding.routingStopped,
+      footprint: winding.footprint,
       conductorLength_m: winding.conductorLength_m,
       conductorArea_mm2: winding.conductorArea_mm2,
       phaseResistance_ohm: winding.phaseResistance_ohm,

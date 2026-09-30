@@ -15,7 +15,11 @@ import { fileURLToPath } from "node:url";
 
 import { evalExpr, resolveScope, dependencies, parseExpr, field, ExprError } from "../src/core/expr.js";
 import { resolveShape, shapeAt, shapeOutline, shapeAreaFraction, shapeClearance, shapeSwing, DEG } from "../src/core/shapes.js";
-import { coilPolys, windingLayout } from "../src/core/geometry.js";
+import { coilPolys, windingLayout, windingPlan, coilFootprintOf } from "../src/core/geometry.js";
+import { routeTurns, distanceField, fieldDepth, levelLoops, insetDepth, polygonArea,
+         polygonPerimeter, simplifyClosed } from "../src/core/route.js";
+import { specToParams, defaultSpec } from "../src/core/spec.js";
+import { winding as windingGate } from "../src/study/objectives.js";
 import { closedCurve, curveAt, refine, curveArea, curveAreaFraction, curveFrame, splineThrough,
          loftSchedule, loftAt, loftVolume, tessellate, selfIntersects, curveFromProfile, inspectCurve,
          curveToVector, curveFromVector, curveBounds, bezierAt, CurveError,
@@ -576,6 +580,136 @@ function solids() {
 
 /* ---- main ------------------------------------------------------------------------------------- */
 
+/* ---- routing the winding ------------------------------------------------------------------- */
+
+/* The distance between two closed polygons, brute force. Used to assert the property the router
+ * gets for free and a vertex-by-vertex offset would have to be checked for: consecutive turns are
+ * at least a trace pitch apart everywhere, not merely at the vertices somebody sampled. */
+function polygonGap(A, B) {
+  const toSeg = (px, py, a, b) => {
+    const ex = b[0] - a[0], ey = b[1] - a[1], ee = ex * ex + ey * ey;
+    let t = ee > 0 ? ((px - a[0]) * ex + (py - a[1]) * ey) / ee : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    return Math.hypot(px - a[0] - t * ex, py - a[1] - t * ey);
+  };
+  let best = Infinity;
+  for (const P of A) for (let i = 0; i < B.length; i++) best = Math.min(best, toSeg(P[0], P[1], B[i], B[(i + 1) % B.length]));
+  for (const P of B) for (let i = 0; i < A.length; i++) best = Math.min(best, toSeg(P[0], P[1], A[i], A[(i + 1) % A.length]));
+  return best;
+}
+
+function routing() {
+  process.stderr.write("\nrouting\n");
+  const c = report.cases.routing = {};
+
+  /* A rectangle is the worst case for a distance field and the only offset whose answer can be
+   * written down: eroding a convex polygon by d gives the polygon inset by d, with sharp corners.
+   * Everything a real coil outline is made of is smoother than this. */
+  const rect = [[0, 0], [20, 0], [20, 10], [0, 10]];
+  const R = routeTurns(rect, { edgeMargin_mm: 0.4, tracePitch_mm: 0.5, fillFraction: 1 });
+  c.rectangle = { depth_mm: R.depth_mm, turns: R.turns.length, area_mm2: polygonArea(R.turns[0]) };
+  ok("a rectangle's routing depth is its half-width", Math.abs(R.depth_mm - 5) < 0.05,
+     `${R.depth_mm.toFixed(4)} mm against 5`);
+  ok("the first turn encloses the eroded rectangle", Math.abs(polygonArea(R.turns[0]) - 19.2 * 9.2) < 0.05 * 19.2 * 9.2 / 100,
+     `${polygonArea(R.turns[0]).toFixed(3)} mm2 against ${(19.2 * 9.2).toFixed(3)}`);
+  ok("every turn is wound the same way round", R.turns.every(t => polygonArea(t) > 0));
+
+  /* The property the whole approach exists for. Two level sets of a distance function at levels a
+   * and b are |a - b| apart everywhere, so trace clearance is a consequence of the construction
+   * rather than something to check for and repair. */
+  let worstGap = Infinity;
+  for (let i = 1; i < R.turns.length; i++) worstGap = Math.min(worstGap, polygonGap(R.turns[i - 1], R.turns[i]));
+  c.minTurnGap_mm = worstGap;
+  ok("consecutive turns are a full trace pitch apart everywhere", worstGap > 0.5 - 0.02,
+     `closest approach ${worstGap.toFixed(4)} mm against a 0.5 mm pitch`);
+
+  /* A dogbone: two rooms joined by a corridor 1.2 mm wide. Offset past 0.6 mm and the level set is
+   * two loops, which is two turns shorted together rather than one turn. */
+  const bone = [[-10, -5], [-3, -5], [-3, -0.6], [3, -0.6], [3, -5], [10, -5],
+                [10, 5], [3, 5], [3, 0.6], [-3, 0.6], [-3, 5], [-10, 5]];
+  const B = routeTurns(bone, { edgeMargin_mm: 0.2, tracePitch_mm: 0.4, fillFraction: 1, maxTurns: 40 });
+  c.dogbone = { turns: B.turns.length, stopped: B.stopped, filled_mm: B.filled_mm };
+  ok("a winding that pinches stops at the pinch", B.stopped === "split",
+     `stopped "${B.stopped}" after ${B.turns.length} turns, ${B.filled_mm.toFixed(2)} mm in`);
+  ok("every turn laid before the pinch is a single loop", B.turns.every(t => polygonArea(t) > 0) && B.turns.length >= 1,
+     `${B.turns.length} turns`);
+
+  /* Fill fraction against a real coil outline: the turn count and the copper length have to fall
+   * together and monotonically, because that is the trade the optimizer is being asked to read —
+   * inner turns buy less flux linkage than they cost in resistance, and where that turns over is
+   * the question. */
+  const base = defaultSpec();
+  base.design.stator.coilCurve = { trailing: [-0.30, -0.40, -0.42, -0.38],
+                                   leading: [0.38, 0.42, 0.40, 0.30], u0: 0.03, u1: 0.97 };
+  base.design.stator.turnsPerLayer = null;
+  const series = [1, 0.75, 0.5, 0.25].map(f => {
+    const d = JSON.parse(JSON.stringify(base));
+    d.design.stator.fillFraction = f;
+    const p = specToParams(normalizeSpec(d).spec);
+    const W = windingPlan(p);
+    const polys = coilPolys(p, W);
+    return { f, turns: W.turns, depth_mm: W.depth_mm, stopped: W.stopped,
+             length_mm: polys.reduce((a, q) => a + polygonPerimeter(q.pts), 0) };
+  });
+  c.fillSeries = series;
+  ok("the coil footprint is traced, not a wedge", windingPlan(specToParams(normalizeSpec(base).spec)).mode === "traced");
+  ok("turns fall monotonically with the fill fraction",
+     series.every((r, i) => i === 0 || r.turns < series[i - 1].turns),
+     series.map(r => `${r.f}:${r.turns}`).join(" "));
+  ok("so does the copper", series.every((r, i) => i === 0 || r.length_mm < series[i - 1].length_mm),
+     series.map(r => `${r.f}:${r.length_mm.toFixed(0)}mm`).join(" "));
+  ok("every fill fraction sees the same outline depth",
+     series.every(r => Math.abs(r.depth_mm - series[0].depth_mm) < 1e-9));
+  /* Sublinear, and that is the whole point: each turn inward is shorter than the one outside it,
+   * so halving the fill takes much less than half the copper — and much less than half the flux. */
+  ok("copper grows sublinearly in turns",
+     series[0].length_mm / series[3].length_mm < series[0].turns / series[3].turns,
+     `${(series[0].length_mm / series[3].length_mm).toFixed(2)}x copper for ${(series[0].turns / series[3].turns).toFixed(2)}x turns`);
+
+  /* Routing has to be a function of the design and nothing else: a study caches on a spec hash, so
+   * the same spec routed twice must give the same vertices, not merely the same count. */
+  const p0 = specToParams(normalizeSpec(base).spec);
+  const a1 = coilPolys(p0), a2 = coilPolys(p0);
+  ok("routing is deterministic to the last bit",
+     JSON.stringify(a1.map(q => q.pts)) === JSON.stringify(a2.map(q => q.pts)));
+
+  /* And the path a design that predates any of this takes must be the one it always took. The
+   * wedge turns are still drawn by shapeOutline at their own centre angle, and a fill fraction of
+   * one still ends the coil where the outline closes rather than where a bisection says it does. */
+  const stock = specToParams(normalizeSpec(defaultSpec()).spec);
+  const W0 = windingPlan(stock);
+  ok("a design with no coil curve still winds a wedge", W0.mode === "wedge");
+  ok("and winds exactly its turn cap", W0.turns === stock.turns, `${W0.turns} turns`);
+  const { count: Nc } = windingLayout(stock);
+  ok("for every coil", coilPolys(stock).length === Nc * stock.turns);
+
+  /* The depth a wedge reports is the inset at which it closes up, and it has to be the same number
+   * whether it is reached by bisection or by walking the turn loop until shapeOutline gives up. */
+  const deep = insetDepth(d => !!shapeOutline(resolveShape({ count: 6, fraction: 1 }),
+                                              { r0: 15 + d, r1: 40 - d, centre: 0, inset: d }));
+  ok("a wedge's depth is where its own outline closes", Math.abs(deep - W0.depth_mm) < 1e-6,
+     `${deep.toFixed(6)} mm`);
+
+  /* The gate. A design can be well-formed and hold no winding at all, which is not a slow motor. */
+  const starved = JSON.parse(JSON.stringify(base));
+  starved.design.stator.fillFraction = 0.01;
+  const g1 = windingGate(normalizeSpec(starved).spec);
+  ok("a fill fraction too small to hold a turn is rejected", !g1.pass && /no turns/.test(g1.fails[0]));
+  const fine = windingGate(normalizeSpec(base).spec);
+  ok("a coil that routes is not", fine.pass, `${fine.turns} turns, ${fine.depth_mm.toFixed(2)} mm deep`);
+
+  /* Decimation keeps the shape: a circle routed and simplified still encloses its own area. */
+  const circle = Array.from({ length: 256 }, (_, i) => {
+    const t = 2 * Math.PI * i / 256; return [12 * Math.cos(t), 12 * Math.sin(t)];
+  });
+  const C = routeTurns(circle, { edgeMargin_mm: 1, tracePitch_mm: 1, fillFraction: 1, maxTurns: 5 });
+  const want = Math.PI * 11 * 11;
+  ok("a routed circle keeps its area", Math.abs(polygonArea(C.turns[0]) - want) < 0.005 * want,
+     `${polygonArea(C.turns[0]).toFixed(2)} mm2 against ${want.toFixed(2)}, ${C.turns[0].length} points`);
+  ok("and its concentric turns are a pitch apart", Math.abs(C.depth_mm - 12) < 0.05,
+     `depth ${C.depth_mm.toFixed(3)} mm`);
+}
+
 const args = process.argv.slice(2);
 const outFile = args.includes("--out") ? args[args.indexOf("--out") + 1] : null;
 
@@ -587,6 +721,7 @@ reuse();
 shapes();
 curves();
 solids();
+routing();
 
 if (outFile) {
   await mkdir(dirname(resolve(ROOT, outFile)), { recursive: true });

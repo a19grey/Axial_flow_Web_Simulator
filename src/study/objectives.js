@@ -24,7 +24,8 @@
 
 import { evalExpr, dependencies, ExprError } from "../core/expr.js";
 import { specToParams } from "../core/spec.js";
-import { inspectRegions } from "../core/geometry.js";
+import { inspectRegions, windingPlan, coilFootprintOf, windingLayout } from "../core/geometry.js";
+import { curveFrame, inspectCurve } from "../core/curves.js";
 
 /* Fab and printer limits. Defaults are a common 4-layer process class and a 0.4 mm nozzle, and
  * every one of them is a study-spec field, because the point of the gate is that it describes the
@@ -205,6 +206,63 @@ export function containment(spec) {
   return { pass: fails.length === 0, fails, overrun_mm: worst };
 }
 
+/* ---- the winding ------------------------------------------------------------------------------- */
+
+/* Is there a coil in there at all?
+ *
+ * Once the turn count is an *output* — the fill fraction and the outline decide it between them —
+ * a design can be perfectly well-formed and still describe no winding: an outline too thin to hold
+ * one turn, or a fill fraction that rounds to none. Those are not slow motors, they are not motors,
+ * and the search needs them rejected rather than scored at zero, which it would otherwise read as
+ * a flat region worth exploring.
+ *
+ * The third failure is the one only a router can see. Pushed far enough in, a non-convex outline
+ * pinches and its offset splits into two loops. Two loops is not a turn; it is two turns shorted
+ * together at the pinch, carrying a current the solver would faithfully model and no board would
+ * ever carry. Routing stops at the split and this gate reports it.
+ *
+ * Like the other spec-only gates it costs no solve. The router builds one distance field on a grid
+ * of a few thousand nodes — single-digit milliseconds against the seconds a rejected solve would
+ * have cost.
+ */
+export function winding(spec) {
+  const fails = [];
+  const p = specToParams(spec);
+  let W;
+  try { W = windingPlan(p); }
+  catch (e) { return { pass: false, fails: [`the winding could not be routed: ${e.message}`], turns: null }; }
+
+  if (W.turns < 1) fails.push(
+    `the coil outline holds no turns: it is ${W.depth_mm.toFixed(2)} mm deep at its widest and the ` +
+    `first turn sits ${spec.design.stator.edgeMargin_mm} mm in, at a fill fraction of ${W.fillFraction}`);
+  if (W.stopped === "split") fails.push(
+    `the winding pinches ${W.filled_mm.toFixed(2)} mm in: past there the coil outline offsets into two ` +
+    `separate loops, which is a short between turns rather than a turn`);
+
+  /* The outline itself, on the stator's own annulus. A coil has no loft, so unlike a rotor pole it
+   * cannot leave its box after the fact — but an interpolating spline overshoots its own control
+   * points, and a coil hanging off the board edge or lying across its neighbour is the same kind of
+   * free lunch the rotor gate exists to refuse. */
+  const st = spec.design.stator;
+  const traced = coilFootprintOf(p);
+  let reach = null;
+  if (traced) {
+    const { count } = windingLayout(p);
+    const frame = curveFrame({ r0: st.innerRadius_mm, r1: st.outerRadius_mm, centre: 0, count });
+    const insp = inspectCurve(traced.curve, frame, { tolerance_mm: 0.05 });
+    reach = { uMin: insp.uMin, uMax: insp.uMax, maxAbsV: insp.maxAbsV };
+    if (!insp.simple) fails.push("the coil outline crosses itself, so it is not a shape a turn can follow");
+    if (!insp.insideAnnulus) fails.push(
+      `the coil outline reaches ${insp.uMin.toFixed(3)}..${insp.uMax.toFixed(3)} of the stator annulus, ` +
+      `so the copper hangs off the board`);
+    if (!insp.clearsNeighbour) fails.push(
+      `the coil outline spans ${(200 * insp.maxAbsV).toFixed(0)} % of its own coil pitch, so neighbouring coils short`);
+  }
+
+  return { pass: fails.length === 0, fails, turns: W.turns, depth_mm: W.depth_mm,
+           filled_mm: W.filled_mm, stopped: W.stopped, footprint: W.mode, reach };
+}
+
 export function gateDesign(spec, record, objSpec = {}) {
   const o = { ...OBJECTIVE_DEFAULTS, ...objSpec };
   const gates = [];
@@ -216,7 +274,10 @@ export function gateDesign(spec, record, objSpec = {}) {
   const con = containment(spec);
   gates.push({ name: "containment", pass: con.pass, value: con.overrun_mm, detail: con.fails.join("; ") || null });
 
-  const needsSolve = man.pass && con.pass;
+  const wnd = winding(spec);
+  gates.push({ name: "winding", pass: wnd.pass, value: wnd.turns, detail: wnd.fails.join("; ") || null });
+
+  const needsSolve = man.pass && con.pass && wnd.pass;
   if (!record) return { gates, feasible: gates.every(g => g.pass), needsSolve };
 
   const r = record.results || {};

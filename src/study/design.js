@@ -88,9 +88,14 @@ export function compileDesign(decls, baseSpec) {
     /* Cheap rejection before a design costs a solve: a self-crossing footprint, or a loft that
      * pulls one outside its own pitch. Scalars are in-box by construction. */
     validate(x) {
+      /* A loft belongs to the footprint it sweeps, not to every footprint in the study. Once the
+       * stator has a traced outline of its own there are two curve groups in the vector, and
+       * matching them by the object they write to — design.rotor.* against design.rotor.* — is what
+       * keeps a rotor loft from being checked against a coil it has nothing to do with. */
+      const scope = t => t.slice(0, t.lastIndexOf("."));
       for (const g of groups) {
         if (!g.curve) continue;
-        const loftGroup = groups.find(o => o.kind === "loft");
+        const loftGroup = groups.find(o => o.kind === "loft" && scope(o.target) === scope(g.target));
         const loft = loftGroup ? loftGroup.loft(x.slice(loftGroup.offset, loftGroup.offset + loftGroup.dim)) : null;
         const r = inspectShape(g, x.slice(g.offset, g.offset + g.dim), { loft });
         if (!r.ok) return { ok: false, reason: `${g.name || g.kind}: ${r.reason}` };

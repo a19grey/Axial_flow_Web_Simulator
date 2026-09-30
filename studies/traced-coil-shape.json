@@ -1,0 +1,117 @@
+{
+  "study": "traced-coil-shape",
+  "notes": "What shape should a PCB coil be, and how far in should it be wound? The outline is a two-chain control curve in normalized wedge coordinates - the same language the rotor pole uses, pointed at the stator - and the turns inside it are routed as true planar offsets of that outline rather than nested trapezoids, so the search can reach coils no pair of angles can draw. The turn count is not an input: fillFraction says how far in to wind as a fraction of the room the outline actually has, and the turns fall out. That is the point of the study. Every turn inward links less flux than the one outside it and adds its whole perimeter to the resistance, so at a fixed copper-loss budget there is a depth past which the next turn makes the machine worse. A sweep of the baseline puts that turnover at about 85 % fill; whether it moves once the outline is free to change shape is the question. No poleBounds here: this study does not move the rotor, so its pole is a constant, and gating a constant can only reject the whole study. The demo rotor's own footprint does reach 0.54 mm past the stator rim - an interpolating spline overshoots its control points - which is worth knowing and is not something this search can do anything about.",
+  "baseline": "../src/cases/printed-rotor-demo.json",
+  "overrides": {
+    "design": {
+      "stator": {
+        "turnsPerLayer": null,
+        "coilCurve": {
+          "trailing": [-0.30, -0.40, -0.43, -0.38],
+          "leading": [0.38, 0.43, 0.40, 0.30],
+          "u0": 0.03,
+          "u1": 0.97
+        }
+      }
+    }
+  },
+  "seed": 20260929,
+  "objective": {
+    "maximize": "shear_kPa",
+    "maxSurfaceSpread_pct": 10,
+    "maxSuperpositionError_pct": 1,
+    "process": {
+      "minTraceWidth_mm": 0.15,
+      "minTraceSpacing_mm": 0.15,
+      "layerOptions": [2, 4, 6, 8],
+      "minPrintedFeature_mm": 0.8,
+      "minPrintedWall_mm": 1.2,
+      "minAirGap_mm": 0.8
+    }
+  },
+  "tiers": {
+    "screen": {
+      "mesh": {
+        "activeCellsAcrossDiameter": 96,
+        "cellsAcrossAirGap": 5,
+        "cellsAcrossPoleArc": 48,
+        "cellsAcrossPoleHeight": 3
+      }
+    },
+    "score": {},
+    "confirm": {
+      "mesh": {
+        "activeCellsAcrossDiameter": 200,
+        "cellsAcrossAirGap": 10,
+        "cellsAcrossPoleArc": 128,
+        "cellsAcrossPoleHeight": 6
+      }
+    }
+  },
+  "variables": [
+    {
+      "name": "riOverRo",
+      "min": 0.35,
+      "max": 0.7,
+      "init": 0.423,
+      "writes": [{ "path": "design.stator.innerRadius_mm", "expr": "riOverRo * ro" }]
+    },
+    {
+      "name": "gapOverRo",
+      "min": 0.025,
+      "max": 0.075,
+      "init": 0.0385,
+      "writes": [{ "path": "design.rotor.airGap_mm", "expr": "gapOverRo * ro" }]
+    },
+    {
+      "name": "poleHeightOverGap",
+      "min": 1.0,
+      "max": 4.5,
+      "init": 2.5,
+      "writes": [{ "path": "design.rotor.poleHeight_mm", "expr": "poleHeightOverGap * gapOverRo * ro" }]
+    },
+    {
+      "name": "yokeOverRo",
+      "min": 0.05,
+      "max": 0.14,
+      "init": 0.0769,
+      "writes": [{ "path": "design.rotor.yokeThickness_mm", "expr": "yokeOverRo * ro" }]
+    },
+    {
+      "name": "fill",
+      "min": 0.2,
+      "max": 1.0,
+      "init": 0.85,
+      "path": "design.stator.fillFraction"
+    },
+    {
+      "kind": "footprint",
+      "name": "coil",
+      "target": "design.stator.coilCurve",
+      "stations": 4,
+      "maxV": 0.45,
+      "u0": 0.03,
+      "u1": 0.97,
+      "chordTolerance_mm": 0.004,
+      "init": 0.36
+    }
+  ],
+  "stages": [
+    { "kind": "baseline", "tier": "score" },
+    { "kind": "noise", "tier": "screen", "repeats": 2, "refinements": [1, 1.4, 2] },
+    { "kind": "screen", "tier": "screen", "fraction": 0.3, "drop": false },
+    { "kind": "scan", "tier": "screen", "points": 400 },
+    { "kind": "rankcheck", "tier": "screen", "against": "score", "count": 40 },
+    { "kind": "refine", "tier": "score", "algorithm": "cmaes", "budget": 900, "restarts": 4, "sigma0": 0.22 },
+    {
+      "kind": "ladder",
+      "tier": "score",
+      "rungs": [
+        { "algorithm": "cmaes", "budget": 2200, "sigma0": 0.1 },
+        { "algorithm": "cmaes", "budget": 2600, "sigma0": 0.06 }
+      ]
+    },
+    { "kind": "confirm", "tier": "confirm", "count": 6 }
+  ],
+  "budget": { "hours": 8, "evaluations": 20000 }
+}

@@ -33,7 +33,12 @@ export function defaultSpec() {
       stator: {
         poles: 4, copperLayers: 2,
         innerRadius_mm: 15, outerRadius_mm: 40,
-        turnsPerLayer: 10, peakCurrent_A: 5,
+        /* How much copper goes in, in two parts. `fillFraction` is the driver: turns are laid
+         * from the coil outline inward until they have used that fraction of the depth the
+         * outline actually has, so the same number means the same thing on any coil shape.
+         * `turnsPerLayer` is only a cap on top of that, and null means no cap at all — how many
+         * turns are worth winding is a property of the design, not a constant somebody typed. */
+        turnsPerLayer: 10, fillFraction: 1, peakCurrent_A: 5,
         thickness_mm: PCB.thickness_mm,
         tracePitch_mm: PCB.tracePitch_mm,
         traceWidth_mm: PCB.traceWidth_mm,
@@ -62,7 +67,14 @@ export function defaultSpec() {
          * coils still clear each other at every radius, which the tool checks. */
         coilSpanFraction: 1,
         coilSkew_deg: 0,
-        coilShape: null
+        coilShape: null,
+        /* The coil outline as a traced curve — the rotor pole's language pointed at the stator:
+         * controlPoints [[u, v], ...], or through [[u, v], ...], or a trailing/leading pair, with
+         * u from the stator bore to its rim and v in units of the coil pitch. Set, it replaces the
+         * span, the skew and the profile, and the turns inside it are routed by true planar offset
+         * rather than nested as trapezoids (src/core/route.js). There is no coil loft: every
+         * copper layer is the same outline at a different height. */
+        coilCurve: null
       },
       rotor: {
         airGap_mm: 3, mu_r: 20,
@@ -174,7 +186,13 @@ export function normalizeSpec(input) {
   ds.copperLayers = pickEnum(st.copperLayers, [2, 4], d.design.stator.copperLayers, "design.stator.copperLayers", warnings);
   ds.innerRadius_mm = num(st.innerRadius_mm, ds.innerRadius_mm);
   ds.outerRadius_mm = num(st.outerRadius_mm, ds.outerRadius_mm);
-  ds.turnsPerLayer = Math.max(1, Math.round(num(st.turnsPerLayer, ds.turnsPerLayer)));
+  /* An explicit null is "no cap", which is not the same as an absent field taking the default.
+   * `num()` would coerce both to a number and the distinction would be lost on the first
+   * round-trip through the archive. */
+  ds.turnsPerLayer = st.turnsPerLayer === null ? null
+    : st.turnsPerLayer === undefined ? ds.turnsPerLayer
+    : Math.max(1, Math.round(num(st.turnsPerLayer, ds.turnsPerLayer)));
+  ds.fillFraction = Math.min(1, Math.max(0, num(st.fillFraction, ds.fillFraction)));
   ds.peakCurrent_A = num(st.peakCurrent_A, ds.peakCurrent_A);
   ds.thickness_mm = clampMin(st.thickness_mm, 0.1, ds.thickness_mm);
   ds.tracePitch_mm = clampMin(st.tracePitch_mm, 0.05, ds.tracePitch_mm);
@@ -188,6 +206,7 @@ export function normalizeSpec(input) {
   ds.coilSpanFraction = Math.min(1, Math.max(0.05, num(st.coilSpanFraction, ds.coilSpanFraction)));
   ds.coilSkew_deg = num(st.coilSkew_deg, ds.coilSkew_deg);
   ds.coilShape = shapeProfile(st.coilShape, "design.stator.coilShape", warnings);
+  ds.coilCurve = coilCurveSpec(st.coilCurve, warnings);
 
   const rt = src.design?.rotor ?? {}, dr = s.design.rotor;
   dr.airGap_mm = clampMin(rt.airGap_mm, 0.3, dr.airGap_mm);
@@ -275,6 +294,33 @@ export function normalizeSpec(input) {
 /* A traced footprint, checked by building it. Authoring errors come back as warnings naming the
  * field and what would fix it, and the design falls back to its arc rather than failing to load —
  * the same contract every other malformed field in here gets. */
+/* The coil outline, checked the way the pole's is: it has to parse, and it has to stay inside the
+ * annulus and its own pitch. What it does *not* get is a loft — a coil is copper on a layer — so
+ * the two ways a pole can leave its box after the fact do not arise here and there is nothing to
+ * gate that the normalized coordinates have not already settled. */
+function coilCurveSpec(v, warnings) {
+  if (v == null) return null;
+  try {
+    const curve = footprintCurve(v, "design.stator.coilCurve");
+    const insp = inspectSolid(tracedSolid({ name: "coilCurve", r0: 1, r1: 2, z0: 0, z1: 1 },
+                                          { count: 8, curve }));
+    if (!insp.withinDeclaredRadii)
+      warnings.push("design.stator.coilCurve: the outline reaches outside the 0..1 radial range, so the coil overhangs the board annulus it is measured in. An interpolating curve overshoots its own points slightly, which is the usual cause. Routed as drawn either way.");
+    if (insp.overlaps)
+      warnings.push("design.stator.coilCurve: the outline is wider than its own coil pitch (|v| past 0.5), so neighbouring coils short against each other.");
+    /* Two tolerances, because they buy different things. chordTolerance_mm is how finely the
+     * outline itself is drawn; routeTolerance_mm is how finely each routed turn is handed to
+     * Biot-Savart, which is the cost that scales with the turn count. routeCell_mm overrides the
+     * router's distance-field pitch, which defaults to half a trace pitch. */
+    return { ...v, chordTolerance_mm: clampMin(v.chordTolerance_mm, 1e-4, DEFAULT_CHORD_TOLERANCE_MM),
+             routeTolerance_mm: v.routeTolerance_mm == null ? null : clampMin(v.routeTolerance_mm, 1e-4, 0.02),
+             routeCell_mm: v.routeCell_mm == null ? null : clampMin(v.routeCell_mm, 1e-3, 0.25) };
+  } catch (e) {
+    warnings.push(`${e.message}; the coil falls back to its wedge.`);
+    return null;
+  }
+}
+
 function poleCurveSpec(v, warnings) {
   if (v == null) return null;
   try {
@@ -387,12 +433,13 @@ export function specToParams(spec) {
   return {
     poles: st.poles, layers: st.copperLayers,
     ri: st.innerRadius_mm, ro: st.outerRadius_mm,
-    turns: st.turnsPerLayer, amps: st.peakCurrent_A,
+    turns: st.turnsPerLayer, fillFraction: st.fillFraction, amps: st.peakCurrent_A,
     pcbT: st.thickness_mm, pitch: st.tracePitch_mm, traceW: st.traceWidth_mm, edge: st.edgeMargin_mm,
     arcSegments: PCB.arcSegments,
     copperT: st.copperThickness_um * 1e-3, boardRho: st.boardDensity_kg_m3,
     coilCount: st.coilCount, phasePattern: st.phasePattern, coilSense: st.coilSense,
     coilSpan: st.coilSpanFraction, coilSkew: st.coilSkew_deg, coilShape: st.coilShape,
+    coilCurve: st.coilCurve,
     coilSideSegments: PCB.coilSideSegments,
     poleShape: rt.poleShape, poleCurve: rt.poleCurve, poleLoft: rt.poleLoft, poleBounds: rt.poleBounds,
     gap: rt.airGap_mm, murRot: rt.mu_r, tooth: rt.poleHeight_mm, yoke: rt.yokeThickness_mm, arc: rt.poleArcFraction,

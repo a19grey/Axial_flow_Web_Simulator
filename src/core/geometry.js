@@ -11,6 +11,8 @@ import { LAYER_Z, RASTER_SUPERSAMPLE } from "./constants.js";
 import { makeMesh, uniformMesh, cellsAcross, CYLINDRICAL } from "./mesh.js";
 import { gradedAxis, symmetricAxis } from "./grading.js";
 import { DEG, resolveShape, shapeAt, shapeOutline } from "./shapes.js";
+import { curveFrame, tessellate } from "./curves.js";
+import { routeTurns, insetDepth, ROUTE_DEFAULTS } from "./route.js";
 import { wedgeSolid, tracedSolid, solidVolume, solidStations, solidAngularHalf, solidRadialExtent,
          solidFrame, solidHeightFraction, footprintCurve, footprintLoft, inspectSolid } from "./ir.js";
 import { polygonRT, coverageTable, footprintCopies, clampTable, pointInPolygonRT } from "./raster.js";
@@ -48,32 +50,114 @@ export function coilShapeOf(p) {
   return resolveShape({ count, fraction: p.coilSpan ?? 1, skew: (p.coilSkew || 0) * DEG, profile: p.coilShape });
 }
 
+/* The coil outline as a *traced* footprint, or null if the design does not use one.
+ *
+ * Exactly the rotor pole's language, pointed at the stator: a closed control-point curve in
+ * normalized wedge coordinates, u from the stator bore to its rim and v in units of the coil pitch.
+ * Set, it replaces the span, the skew and the width/offset profile entirely, and the turns inside
+ * it are routed rather than nested (src/core/route.js). Absent, every existing design takes exactly
+ * the path it always did.
+ *
+ * There is deliberately no coil loft. A pole is a solid and can flare as it climbs; a coil is
+ * copper on a layer, and every layer is the same outline at a different z. A loft here would
+ * describe a board nobody can fabricate.
+ */
+export function coilFootprintOf(p) {
+  if (!p.coilCurve) return null;
+  const curve = footprintCurve(p.coilCurve, "design.stator.coilCurve");
+  return { curve, tolerance_mm: p.coilCurve.chordTolerance_mm || undefined };
+}
+
+/* How many turns fit, how far in they reach, and — for a traced coil — the turns themselves.
+ *
+ * One function for both footprint kinds, because the thing that has to mean the same in both is
+ * the *fill fraction*: the winding is laid from the outline inward until it has used that fraction
+ * of the depth the outline actually has. A wedge's depth is the inset at which the wedge closes
+ * up, found by bisection on the same closed form that draws it; a traced outline's is the largest
+ * circle it contains, read off the router's distance field. Either way `fillFraction: 0.6` is a
+ * statement about this shape rather than a turn count borrowed from a different one.
+ *
+ * `turnsPerLayer` survives as a cap, not as the answer. Left null it imposes nothing and the fill
+ * fraction decides alone, which is the point: how many turns are worth winding depends on where
+ * the inner ones stop linking enough flux to pay for their own resistance, and that is a question
+ * for the search rather than for whoever wrote the spec.
+ *
+ * The traced turns are built once at angle zero and rotated onto each coil. The wedge turns are
+ * built per coil at their own centre angle, exactly as before, so a design that predates this
+ * function is unchanged to the last bit.
+ */
+export function windingPlan(p) {
+  const { count: Nc } = windingLayout(p);
+  const pitch = p.pitch, edge = p.edge;
+  const fill = Number.isFinite(+p.fillFraction) ? Math.min(1, Math.max(0, +p.fillFraction)) : 1;
+  /* `+null` is 0 and Number.isFinite(0) is true, so "no cap" has to be tested for absence before
+   * it is coerced — otherwise a null turn count silently becomes a cap of one turn. */
+  const capped = p.turns !== null && p.turns !== undefined && p.turns !== "" && Number.isFinite(+p.turns);
+  const cap = capped ? Math.max(1, Math.round(+p.turns)) : ROUTE_DEFAULTS.maxTurns;
+  const traced = coilFootprintOf(p);
+
+  if (traced) {
+    const frame = curveFrame({ r0: p.ri, r1: p.ro, centre: 0, count: Nc });
+    const tol = traced.tolerance_mm ?? 0.01;
+    const { points: outline, budgeted } = tessellate(traced.curve, frame, { tolerance_mm: tol });
+    const r = routeTurns(outline, { edgeMargin_mm: edge, tracePitch_mm: pitch, fillFraction: fill,
+                                    maxTurns: cap, cell_mm: p.coilCurve.routeCell_mm ?? null,
+                                    tolerance_mm: p.coilCurve.routeTolerance_mm ?? undefined });
+    return { mode: "traced", coils: Nc, turns: r.turns.length, cap, fillFraction: fill,
+             depth_mm: r.depth_mm, filled_mm: r.filled_mm, stopped: r.stopped, grid: r.grid,
+             outline, base: r.turns, budgeted };
+  }
+
+  const shape = coilShapeOf(p);
+  const sideSegs = shape.constant ? 1 : Math.max(2, Math.round(p.coilSideSegments ?? 12));
+  const arcSegs = p.arcSegments ?? 10;
+  const at = (d, centre) => shapeOutline(shape, { r0: p.ri + d, r1: p.ro - d, centre, inset: d,
+                                                  sideSegs, arcSegs });
+  const depth_mm = insetDepth(d => !!at(d, 0));
+  /* Filling completely is the old behaviour and stays *exactly* the old behaviour: the turn loop
+   * ends where the outline closes up, not where a bisection says it does. Only a fill fraction
+   * short of one consults the depth, and then a millionth of a millimetre either way moves nothing
+   * a reader would notice. */
+  const target = fill >= 1 ? Infinity : fill * depth_mm;
+  let turns = 0;
+  while (turns < cap && edge + turns * pitch <= target + 1e-9 && at(edge + turns * pitch, 0)) turns++;
+  return { mode: "wedge", coils: Nc, turns, cap, fillFraction: fill, depth_mm,
+           filled_mm: turns ? edge + (turns - 1) * pitch : 0,
+           stopped: turns >= cap ? "cap" : fill < 1 && edge + turns * pitch > target ? "fill" : "depth",
+           shape, sideSegs, arcSegs, at };
+}
+
 /* Concentric turns, one group per coil, `layers` copies stacked in z.
  *
- * Turn j is the coil outline inset by j pitches plus the edge margin: the inset comes off the
- * radial ends directly and off the sides as inset/r, which is the angle that same clearance
- * subtends. A turn that the insets have closed up ends the coil, so a turns count that does not
- * fit in the copper produces fewer turns rather than crossed traces.
+ * On the wedge path turn j is the coil outline inset by j pitches plus the edge margin: the inset
+ * comes off the radial ends directly and off the sides as inset/r, which is the angle that same
+ * clearance subtends. A turn that the insets have closed up ends the coil, so a turns count that
+ * does not fit in the copper produces fewer turns rather than crossed traces.
+ *
+ * On the traced path the turns come from the router, which offsets the outline in the plane by a
+ * true distance rather than in each coordinate separately — the difference matters the moment the
+ * outline stops being a wedge, because an outline that is not convex pinches as it is offset and a
+ * per-coordinate inset draws the pinch as a tangle instead of stopping at it.
  *
  * A coil wound the other way round has its outline traversed in reverse, which reverses the
  * current direction in every one of its segments.
  */
-export function coilPolys(p) {
+export function coilPolys(p, plan = null) {
   const { count: Nc, phase, sense } = windingLayout(p);
-  const shape = coilShapeOf(p);
-  const pitch = p.pitch, edge = p.edge, nArc = p.arcSegments ?? 10;
-  /* A straight-sided coil has nothing between its corners, so its sides stay single chords — that
-   * is the geometry, not a coarse sampling of it. A profiled coil's sides curve, and are sampled. */
-  const sideSegs = shape.constant ? 1 : Math.max(2, Math.round(p.coilSideSegments ?? 12));
+  const W = plan || windingPlan(p);
   const polys = [];
   for (let k = 0; k < Nc; k++) {
     const th = k * 2 * Math.PI / Nc, ph = phase[k];
-    for (let j = 0; j < p.turns; j++) {
-      const d = edge + j * pitch;
-      const pts = shapeOutline(shape, { r0: p.ri + d, r1: p.ro - d, centre: th, inset: d,
-                                        sideSegs, arcSegs: nArc });
-      if (!pts) break;
-      polys.push({ pts: sense[k] < 0 ? pts.slice().reverse() : pts, ph, coil: k, sense: sense[k] });
+    const push = pts => polys.push({ pts: sense[k] < 0 ? pts.slice().reverse() : pts, ph, coil: k, sense: sense[k] });
+    if (W.mode === "traced") {
+      const c = Math.cos(th), s = Math.sin(th);
+      for (const base of W.base) push(base.map(([x, y]) => [x * c - y * s, x * s + y * c]));
+    } else {
+      for (let j = 0; j < W.turns; j++) {
+        const pts = W.at(p.edge + j * p.pitch, th);
+        if (!pts) break;
+        push(pts);
+      }
     }
   }
   return polys;
@@ -690,15 +774,16 @@ export function buildMotor(p) {
   const g = motorGeom(p);
   const { mu, volumes } = rasterizeMaterials(mesh, p);
   const zLay = layerZ(p);
-  const polys = coilPolys(p);
+  const winding = windingPlan(p);
+  const polys = coilPolys(p, winding);
   const segs = segsFromPolys(polys, zLay);
   // The trace field depends only on the winding and the mesh, never on rotor angle or current.
   const segKey = JSON.stringify([mesh.kind, mesh.nx, mesh.ny, mesh.nz, mesh.x0, mesh.x1, mesh.y0, mesh.y1,
                                  mesh.z0, mesh.hMin, mesh.hMax, mesh.sectors,
-                                 p.poles, p.ri, p.ro, p.turns, p.layers, p.pitch, p.edge,
+                                 p.poles, p.ri, p.ro, p.turns, p.fillFraction, p.layers, p.pitch, p.edge,
                                  p.coilCount, p.phasePattern, p.coilSense,
-                                 p.coilShape, p.coilSpan, p.coilSkew, p.coilSideSegments]);
-  return { kind: "motor", p, mesh, mu, volumes, polys, segs, segKey, zLay, g };
+                                 p.coilShape, p.coilCurve, p.coilSpan, p.coilSkew, p.coilSideSegments]);
+  return { kind: "motor", p, mesh, mu, volumes, polys, segs, segKey, zLay, g, winding };
 }
 
 /* Resolution actually achieved, for the quality flags and AFS.plan(). */

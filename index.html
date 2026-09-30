@@ -150,9 +150,11 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
       <div><label for="ro">Outer radius (mm)</label><input id="ro" type="number" value="40" step="1"></div>
     </div>
     <div class="pair">
-      <div><label for="turns">Turns per layer</label><input id="turns" type="number" value="10" min="1" step="1"></div>
+      <div><label for="turns">Turn cap per layer</label><input id="turns" type="number" value="10" min="1" step="1" placeholder="none"></div>
       <div><label for="amps">Peak current (A)</label><input id="amps" type="number" value="5" step="0.5"></div>
     </div>
+    <label for="fill">Fill fraction <span class="muted" style="font-weight:400">— how far in the turns are wound, as a fraction of the room the coil outline has. Leave the cap blank to let this decide alone.</span></label>
+    <input id="fill" type="number" value="1" min="0" max="1" step="0.05">
     <label for="copperT">Copper thickness (µm) <span class="muted" style="font-weight:400">— resistance and mass only</span></label>
     <input id="copperT" type="number" value="35" min="1" step="5">
     <h2 style="margin-top:16px">Rotor</h2>

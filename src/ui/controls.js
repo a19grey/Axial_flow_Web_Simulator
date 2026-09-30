@@ -8,13 +8,19 @@
 import { $ } from "./dom.js";
 import { defaultSpec, normalizeSpec, getPath, setPath } from "../core/spec.js";
 
-/* control id -> [spec path, kind]. `kind` only says how to read and write the element. */
+/* control id -> [spec path, kind]. `kind` only says how to read and write the element.
+ *
+ * "optional" is a number box whose *empty* state means something: null, not zero. The turn cap is
+ * the one field where that distinction is load-bearing — blank means "no cap, let the fill
+ * fraction decide" — and `+el.value` on an empty box is 0, which normalizes to a cap of one turn.
+ */
 export const CONTROLS = {
   poles:   ["design.stator.poles", "select"],
   layers:  ["design.stator.copperLayers", "select"],
   ri:      ["design.stator.innerRadius_mm", "number"],
   ro:      ["design.stator.outerRadius_mm", "number"],
-  turns:   ["design.stator.turnsPerLayer", "number"],
+  turns:   ["design.stator.turnsPerLayer", "optional"],
+  fill:    ["design.stator.fillFraction", "number"],
   amps:    ["design.stator.peakCurrent_A", "number"],
   copperT: ["design.stator.copperThickness_um", "number"],
   gap:     ["design.rotor.airGap_mm", "number"],
@@ -71,7 +77,13 @@ export function syncShapeNote() {
   if (!el) return;
   const pole = held.design?.rotor?.poleShape, coil = held.design?.stator?.coilShape;
   const curve = held.design?.rotor?.poleCurve, loft = held.design?.rotor?.poleLoft;
+  const coilCurve = held.design?.stator?.coilCurve;
   const parts = [];
+  if (coilCurve) {
+    const n = (coilCurve.through || coilCurve.controlPoints || coilCurve.trailing || []).length;
+    parts.push(`a traced coil outline of ${n} control points, whose turns are routed inward from it — `
+      + `so the turn box above is only a cap and the fill fraction decides how many there are`);
+  }
   if (curve) {
     const n = (curve.through || curve.controlPoints || curve.trailing || []).length;
     parts.push(`a traced pole footprint of ${n} control points, which replaces the pole arc, skew and profile above`);
@@ -85,7 +97,7 @@ export function syncShapeNote() {
     + `<button type="button" class="linkish" id="shapeClear">Use plain arcs instead</button>`;
   $("#shapeClear").onclick = () => {
     if (held.design?.rotor) { held.design.rotor.poleShape = null; held.design.rotor.poleCurve = null; held.design.rotor.poleLoft = null; }
-    if (held.design?.stator) held.design.stator.coilShape = null;
+    if (held.design?.stator) { held.design.stator.coilShape = null; held.design.stator.coilCurve = null; }
     syncShapeNote();
     announceSpecChange();
   };
@@ -129,7 +141,9 @@ export function readSpec({ name, notes } = {}) {
   for (const [id, [path, kind]] of Object.entries(CONTROLS)) {
     const el = $("#" + id);
     if (!el) continue;
-    setPath(raw, path, kind === "check" ? el.checked : +el.value);
+    setPath(raw, path, kind === "check" ? el.checked
+                     : kind === "optional" ? (String(el.value).trim() === "" ? null : +el.value)
+                     : +el.value);
   }
   raw.mesh.mode = meshMode.value;
   raw.name = (name ?? $("#projName")?.value ?? "").trim() || "Untitled motor";
@@ -156,8 +170,9 @@ export function writeSpec(spec) {
     const el = $("#" + id);
     if (!el) continue;
     const v = getPath(spec, path);
-    if (v === undefined) { skipped.push(path); continue; }
+    if (v === undefined && kind !== "optional") { skipped.push(path); continue; }
     if (kind === "check") el.checked = !!v;
+    else if (kind === "optional") el.value = (v === null || v === undefined) ? "" : +v;
     else if (kind === "select") {
       const s = String(v);
       if ([...el.options].some(o => o.value === s)) el.value = s;

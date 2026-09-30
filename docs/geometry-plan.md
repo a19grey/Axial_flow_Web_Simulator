@@ -379,6 +379,63 @@ What this does **not** do, and G1/G2 still must: arbitrary traced outlines, fill
 z-stations and twists, more than one wedge shape per machine, and coil turns as true inward offsets of a
 traced curve rather than angular insets of a wedge.
 
+**`src/core/route.js` — traced coils and the fill fraction (G2).** The stator's coils now take the same
+language as the rotor's poles. `design.stator.coilCurve` is a closed control-point curve in normalized
+wedge coordinates — u from the board's bore to its rim, v in units of the coil pitch — and the turns
+inside it are *routed* rather than drawn.
+
+The plan called for "general inward offsetting with the self-intersection sweep, SDF fallback". That
+order is inverted in what landed: the distance field is the primary and there is no vertex offsetter at
+all. The reason is that an inward offset changes topology, and only one of the two approaches survives
+it. Push a curve in far enough and its concave regions collide: the offset self-intersects, pinches,
+splits into two loops, and vanishes. A vertex-by-vertex offset draws all of that as a tangle and then
+needs a sweep to decide which parts of the tangle were real. The level sets of
+
+    d(x) = distance from x to the outline, positive inside
+
+have the same events built in, and each one arrives as an answer rather than as a mess to clean up:
+
+- **Turns cannot touch.** Two level sets at levels a and b are at least `|a - b|` apart *everywhere*, so
+  trace-to-trace clearance is `tracePitch - traceWidth` by construction rather than by a check that
+  might miss the one place the outline turns sharply. `tests/geometry.js` asserts it by brute force
+  anyway, because a property this convenient should be measured once.
+- **A pinch reports itself.** When the level set stops being one loop, marching squares returns two, and
+  routing stops there with `stopped: "split"`. Two loops is not a turn; it is two turns shorted together
+  at the pinch, and a study gate rejects it before it costs a solve.
+- **There is a well-defined bottom.** `max d` over the interior is the largest circle the outline
+  contains — exactly how deep a winding can go, and the denominator that makes a fill fraction mean the
+  same thing on a shape a search has just invented as on the one it started from.
+
+**The turn count stopped being an input.** `design.stator.fillFraction` says how far in to wind as a
+fraction of that depth; `turnsPerLayer` survives only as a cap, and `null` means no cap at all. This is
+the change that lets a search ask the question that matters: every turn inward links less flux than the
+one outside it and adds its whole perimeter to the resistance, so at a fixed copper-loss budget there is
+a depth past which the next turn makes the machine *worse*. A sweep of the printed-rotor demo shows the
+turnover plainly — torque per root watt peaks at 12 turns (85 % fill) and falls again at 14:
+
+| fill | turns | copper (m) | R (Ω) | torque (mN·m) | T/√W, relative |
+|-----:|------:|-----------:|------:|--------------:|---------------:|
+| 0.20 |     3 |       3.20 | 1.919 |         0.912 |          0.275 |
+| 0.40 |     5 |       5.03 | 3.018 |         2.208 |          0.531 |
+| 0.70 |    10 |       8.52 | 5.113 |         5.211 |          0.962 |
+| 0.85 |    12 |       9.34 | 5.607 |         5.670 |      **1.000** |
+| 1.00 |    14 |       9.71 | 5.824 |         5.767 |          0.998 |
+
+The margin is thin here — 0.2 % — because this outline is wide enough that even its innermost turns sit
+over useful flux. That is the honest result and it is also the argument for the study: the turnover is a
+property of the coil *shape*, and the shape is now a variable.
+
+**What the exit criterion turned out to be.** G2 asked that "the trapezoid outline reproduces
+`coilPolys()` to 1e-9". It does not, and cannot. A distance field has a crease along the medial axis, so
+a sharp convex corner offsets to a chamfer about one cell wide; against the closed-form wedge inset the
+router lands within 0.08 % in area and 0.14 % in perimeter at the default quarter-pitch grid, and the
+remainder does not go away with more grid. That is why the wedge **keeps its closed-form path** rather
+than being re-expressed through the router: a design that predates any of this is unchanged to the last
+bit, and the router is only asked to draw the shapes the closed form cannot. The 0.14 % is a systematic
+perimeter bias shared by every routed design, so it moves absolute resistance and not rankings — but it
+is a real number and it belongs here rather than in a commit message.
+
+
 ## Phases
 
 Each phase ends green — all five suites pass, presets reproduce — so the tool is never half-converted.
@@ -425,8 +482,20 @@ overhang check.
 
 ### G2 — Traced coils
 
+*Landed: `src/core/route.js`, `design.stator.coilCurve`, `design.stator.fillFraction`, a `winding` gate
+in the study objectives, the routing report in `plan()` and in the results JSON, and
+`studies/traced-coil-shape.json`. See "Landed so far" for what changed against the plan and why — the
+SDF is the primary rather than the fallback, and the 1e-9 exit criterion was replaced by a measured
+0.08 % / 0.14 % and an argument for keeping the wedge's closed-form path.*
+
 Outline tracing, general inward offsetting with the self-intersection sweep, SDF fallback, per-coil layers,
 keep-outs, chord tolerance and segment budget, declared-and-verified symmetry.
+
+*Not yet: per-coil layer variation (every layer is the same outline at a different z, deliberately —
+a coil is copper on a layer and a loft here would describe a board nobody can fabricate), keep-outs
+(mounting holes and the star point still have nowhere to be declared), and the radial run-outs and vias,
+which the solver does not model either, so the reported resistance remains the resistance of what was
+solved.*
 
 **Exit:** the trapezoid outline reproduces `coilPolys()` to 1e-9; an apostrophe-coil stator solves, and its
 copper SVG, mass, resistance and field are mutually consistent.
