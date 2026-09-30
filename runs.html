@@ -100,10 +100,12 @@ body.frames .vecblock{display:none}
     <a class="back" href="./index.html">&larr; back to the field solver</a>
   </div>
   <h1>Optimization runs</h1>
-  <p class="lede">A reader for optimization archives: every rotor the search tried, in the order it
-  tried them, with the score and the gates that judged each one. Nothing here solves &mdash; each
-  outline is redrawn from its own saved design &mdash; so a whole night scrubs like video. Runs are
-  written by <code>cli/study.js</code> on your own machine and stay there; this page reads them.</p>
+  <p class="lede">A reader for optimization archives: every design the search tried, in the order it
+  tried them, with the score and the gates that judged each one. Both halves of the machine are drawn
+  &mdash; the rotor's pole footprints and the stator's coils, turn by turn as the router laid them &mdash;
+  so a study that only varies the winding still looks like something. Nothing here solves: each outline
+  is redrawn from its own saved design, so a whole night scrubs like video. Runs are written by
+  <code>cli/study.js</code> on your own machine and stay there; this page reads them.</p>
   <div class="pick">
     <select id="runs" style="min-width:min(46ch,60vw)"></select>
     <button id="reload">reload</button>
@@ -139,7 +141,7 @@ cd Axial_flow_Web_Simulator &amp;&amp; npm install</pre></li>
   <section class="panel" id="viewer">
     <div id="headline"></div>
     <div class="stage">
-      <canvas id="plan" title="looking down the shaft"></canvas>
+      <canvas id="plan" title="looking down the shaft: rotor poles and stator coils"></canvas>
       <div>
         <canvas id="loft" title="the pole's radial extent against height"></canvas>
         <canvas id="trace" title="every scored evaluation on this tier"></canvas>
@@ -155,6 +157,11 @@ cd Axial_flow_Web_Simulator &amp;&amp; npm install</pre></li>
         <option value="best">improvements only</option>
         <option value="feasible">every scored design</option>
         <option value="all">everything, rejections included</option>
+      </select>
+      <select id="layers" title="what to draw in the plan view">
+        <option value="both">coils over rotor</option>
+        <option value="wires">coils only</option>
+        <option value="rotor">rotor only</option>
       </select>
       <select id="tier" title="evaluation tier"></select>
       <button id="open" class="primary">open in the tool</button>

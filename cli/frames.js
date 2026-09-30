@@ -3,6 +3,7 @@
  *
  *   node cli/frames.js <run-dir>                       every improvement, in order
  *   node cli/frames.js <run-dir> --mode feasible       every design that scored
+ *   node cli/frames.js <run-dir> --layers wires        the copper alone, no rotor over it
  *   node cli/frames.js <run-dir> --size 1080 --hold 3  square frames, each held 3 frames
  *   node cli/frames.js <run-dir> --video               also run ffmpeg, if it is installed
  *
@@ -40,6 +41,7 @@ const USAGE = `render a run's designs to a frame sequence
   node cli/frames.js <run-dir> [options]
 
   --mode best|feasible|all   which designs to render (default best: one per improvement)
+  --layers both|wires|rotor  which half of the machine the plan view draws (default both)
   --tier <name>              only this evaluation tier (default: the run's primary tier)
   --size <px>                square frame size; the default is 1600x900 instead
   --width/--height <px>      a non-square frame instead
@@ -72,7 +74,8 @@ async function main() {
   try {
     const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
     page.on("pageerror", e => process.stderr.write(`[page error] ${e.message}\n`));
-    const q = new URLSearchParams({ run: runId, frames: "1", mode: args.mode || "best" });
+    const q = new URLSearchParams({ run: runId, frames: "1", mode: args.mode || "best",
+                                    layers: args.layers || "both" });
     await page.goto(`http://127.0.0.1:${port}/runs.html?${q}`, { waitUntil: "load" });
     await page.waitForFunction("window.RUNVIEW && window.RUNVIEW.ready", null, { timeout: 60000 });
     if (args.tier) await page.evaluate(t => window.RUNVIEW.setTier(t), args.tier);
@@ -96,7 +99,7 @@ async function main() {
     process.stderr.write("\n");
     /* A frame-to-design map, so a still lifted out of the movie can be traced back to the design it
      * shows — which is the difference between a nice video and evidence. */
-    writeFileSync(join(outDir, "frames.json"), JSON.stringify({ runId, mode: args.mode || "best", fps, width, height, frames: index }, null, 2) + "\n");
+    writeFileSync(join(outDir, "frames.json"), JSON.stringify({ runId, mode: args.mode || "best", layers: args.layers || "both", fps, width, height, frames: index }, null, 2) + "\n");
   } finally {
     await browser.close();
     server.close();

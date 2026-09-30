@@ -80,6 +80,11 @@ tier, score, the design vector, a dozen metrics, the cost. Ten thousand of them 
 browser in one fetch. The full spec and the full results JSON live in `designs/<hash>.json`, one
 fetch away, written once however many times a design is visited.
 
+A design rejected on its geometry never reaches the solver and so has no results, but its **spec is
+still written**. A shape the search reached for and could not have is one of the more interesting
+things in an archive, and without the spec the viewer has a gate message and no picture of what
+tripped it. Runs recorded before this say `no design saved` on those evaluations.
+
 ### A ledger line
 
 ```json
@@ -142,9 +147,23 @@ sequence is:
 - **everything** — rejections included, which is how you find out that a whole region of the space
   was being thrown away for one reason.
 
+A second selector chooses which half of the machine the plan view draws:
+
+- **coils over rotor** — both, with the iron dropped to a neutral grey wash so the copper under it
+  stays readable. Grey rather than merely faint: the pole colour and phase A are both red, and at
+  half alpha a pole outline and a coil of phase A are the same picture.
+- **coils only** — the winding alone, turn by turn, coloured by phase.
+- **rotor only** — the pole footprints alone, as the viewer drew them before there were coils.
+
+Drawing both halves is not decoration. A study that searches the winding leaves the rotor alone, so
+a rotor-only picture is the same picture eight thousand times over. The coils shown are the real
+routed turns — the same polygons that became Biot-Savart segments — so a coil whose offsets pinch
+looks pinched, and the caption says `stopped on split` underneath it.
+
 **Nothing in the viewer solves anything.** Each outline is drawn from that design's own spec through
-the same `src/core/curves.js` the rasterizer used, so a frame costs about a millisecond and eight
-hours of search scrubs at video rate. A viewer that had to re-solve to show you a design would be a
+the same `src/core/curves.js` the rasterizer used, and its turns through the same `src/core/route.js`
+that laid them, so a design costs about ten milliseconds — routed windings are cached per design
+hash — and eight hours of search still scrubs at video rate. A viewer that had to re-solve to show you a design would be a
 viewer nobody scrubs. To see the fields, *open in the tool* hands the spec to `index.html`, which
 does solve it.
 
@@ -157,6 +176,7 @@ height, which is the part no plan view can show.
 ```sh
 node cli/frames.js <run-dir>                       # improvements, 1600x900
 node cli/frames.js <run-dir> --mode feasible --hold 2 --fps 12
+node cli/frames.js <run-dir> --layers wires         # the copper alone, no iron over it
 node cli/frames.js <run-dir> --size 1080 --video   # square, and run ffmpeg too
 ```
 

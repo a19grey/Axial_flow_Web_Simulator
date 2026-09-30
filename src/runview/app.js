@@ -6,8 +6,10 @@
  * which change moved the score.
  *
  * Nothing here solves anything. Every design's footprint is drawn from its own spec through the same
- * `src/core/curves.js` the solver rasterized it with, so a frame costs a millisecond and the whole
- * run can be scrubbed at video rate. That is deliberate: a viewer that had to re-solve to show you a
+ * `src/core/curves.js` the solver rasterized it with, and its coils through the same
+ * `src/core/route.js` that laid the turns, so a frame costs a millisecond or two and the whole run can
+ * be scrubbed at video rate. Drawing both halves matters more than it sounds: a study that searches
+ * the winding leaves the rotor alone, so a rotor-only picture is the same picture 8,000 times. That is deliberate: a viewer that had to re-solve to show you a
  * design would be a viewer nobody scrubs. The fields are in the tool itself — "Open in the tool"
  * hands the design to `index.html`, which will solve it.
  *
@@ -17,6 +19,8 @@
 
 import { footprintCurve, footprintLoft } from "../core/ir.js";
 import { curveFrame, tessellate, loftAt, toPolar, polarToXY } from "../core/curves.js";
+import { specToParams } from "../core/spec.js";
+import { windingPlan, coilPolys } from "../core/geometry.js";
 
 const $ = s => document.querySelector(s);
 const fmt = (v, d = 4) => (v === null || v === undefined || !Number.isFinite(v) ? "—" : (+v).toPrecision(d));
@@ -29,6 +33,7 @@ const state = {
   view: [],            // the filtered, ordered list being flipped through
   index: 0,
   mode: "best",        // best | all | feasible
+  layers: "both",      // both | wires | rotor — which half of the machine the plan view draws
   tier: null,
   designs: new Map(),  // hash -> { spec, record }
   playing: false
@@ -98,7 +103,7 @@ async function show() {
     catch { d = { spec: null, record: null }; }
     state.designs.set(e.hash, d);
   }
-  drawPlan($("#plan"), d.spec);
+  drawPlan($("#plan"), d.spec, e.hash);
   drawLoft($("#loft"), d.spec);
   drawTrace($("#trace"), e);
   $("#vars").innerHTML = varTable(e, d);
@@ -131,12 +136,52 @@ function fit(canvas) {
   return { g, w, h };
 }
 
-/* Plan view: the machine looked at down the shaft. The pole footprints are traced through exactly
- * the curve code the rasterizer used, at the height the loft makes widest and narrowest, so a flare
- * shows as two outlines rather than having to be imagined. */
-function drawPlan(canvas, spec) {
+/* The winding, routed from the design's own spec and cached by design hash.
+ *
+ * A traced coil costs a distance field to route — tens of milliseconds — which is nothing once per
+ * design but too much once per frame when a design is stepped back onto. A design that describes no
+ * routable winding is cached as its error rather than re-thrown on every redraw: the rejections are
+ * exactly the ones worth looking at, so the picture has to survive them.
+ */
+const windings = new Map();
+function windingFor(hash, spec) {
+  /* Runs written before rejections carried their spec have nothing to route. That is an absent
+   * design, not a broken one, and saying so beats showing a TypeError from the coercion of null. */
+  if (!spec) return { plan: null, polys: [], error: null, missing: true };
+  if (windings.has(hash)) return windings.get(hash);
+  let out;
+  try {
+    const p = specToParams(spec);
+    const plan = windingPlan(p);
+    out = { plan, polys: coilPolys(p, plan), error: null };
+  } catch (e) {
+    out = { plan: null, polys: [], error: e.message };
+  }
+  windings.set(hash, out);
+  return out;
+}
+
+/* Plan view: the machine looked at down the shaft, both halves of it.
+ *
+ * The pole footprints are traced through exactly the curve code the rasterizer used, at the height
+ * the loft makes widest and narrowest, so a flare shows as two outlines rather than having to be
+ * imagined. The coils are the real routed turns, coloured by phase — not a sketch of a coil, the
+ * same polygons that became Biot-Savart segments.
+ *
+ * `state.layers` picks which halves are drawn. Over each other the rotor is dropped to a wash so the
+ * copper under it stays legible; alone, each is drawn at full strength. The stator annulus and the
+ * coil-pitch spokes are always there, because they are the frame both halves are read against.
+ */
+function drawPlan(canvas, spec, hash) {
   const { g, w, h } = fit(canvas);
-  if (!spec) return;
+  if (!spec) {
+    g.fillStyle = css("--muted"); g.font = "12px ui-monospace, monospace";
+    g.fillText("this evaluation saved no design to draw", 12, 22);
+    g.fillText("(runs written before rejections kept their spec)", 12, 40);
+    return;
+  }
+  const showPoles = state.layers !== "wires";
+  const showCoils = state.layers !== "rotor";
   const s = spec.design.stator, r = spec.design.rotor;
   const ri = s.innerRadius_mm, ro = s.outerRadius_mm;
   /* The footprint's u runs over the *rotor* annulus, which overhangs the stator by a millimetre
@@ -173,13 +218,18 @@ function drawPlan(canvas, spec) {
 
   /* Two heights: the gap face and the yoke. On a constant sweep they coincide and one outline is
    * drawn; on a flared or twisted one the pair is the whole point. */
-  const heights = loft ? [0, 1] : [0];
+  /* Over the copper the iron goes neutral, not just faint: the pole colour and phase A are both red,
+   * and at 50 % alpha a pole outline and a coil of phase A are indistinguishable. Drawn alone it
+   * keeps the warn colour it has everywhere else in the tool, including the loft panel beside it. */
+  const wash = state.layers === "both" ? 0.45 : 1;
+  const iron = state.layers === "both" ? css("--ink") : css("--warn");
+  const heights = showPoles ? (loft ? [0, 1] : [0]) : [];
   for (let hi = 0; hi < heights.length; hi++) {
     const sH = heights[hi];
     g.lineWidth = hi === 0 ? 2 : 1;
     g.setLineDash(hi === 0 ? [] : [4, 3]);
-    g.strokeStyle = hi === 0 ? css("--warn") : css("--muted");
-    g.fillStyle = css("--warn"); g.globalAlpha = hi === 0 ? 0.13 : 0;
+    g.strokeStyle = hi === 0 ? iron : css("--muted");
+    g.fillStyle = iron; g.globalAlpha = hi === 0 ? 0.13 * wash : 0;
     for (let p = 0; p < poles; p++) {
       const centre = (p + 0.5) * 2 * Math.PI / poles;
       const pts = curve
@@ -192,14 +242,44 @@ function drawPlan(canvas, spec) {
       g.closePath();
       // Only the gap face is filled; the yoke outline is a dashed line over it, so a flare or a
       // waist reads as the offset between the two rather than as a second solid shape.
-      if (hi === 0) { g.globalAlpha = 0.13; g.fill(); g.globalAlpha = 1; }
-      g.stroke();
+      if (hi === 0) { g.globalAlpha = 0.13 * wash; g.fill(); }
+      g.globalAlpha = wash; g.stroke();
     }
   }
   g.setLineDash([]); g.globalAlpha = 1;
+
+  /* The copper. Every turn of every coil, drawn over the rotor rather than under it — the winding is
+   * what a coil study moves, and a wash of iron on top of it would hide the only thing changing. */
+  const W = showCoils ? windingFor(hash, spec) : null;
+  if (W && W.polys.length) {
+    const phaseInk = [css("--pa"), css("--pb"), css("--pc")];
+    g.lineWidth = 1;
+    g.globalAlpha = state.layers === "wires" ? 0.95 : 0.85;
+    for (const { pts, ph } of W.polys) {
+      if (!pts || pts.length < 3) continue;
+      g.strokeStyle = phaseInk[((ph % 3) + 3) % 3];
+      g.beginPath();
+      g.moveTo(...X(pts[0][0], pts[0][1]));
+      for (let i = 1; i < pts.length; i++) g.lineTo(...X(pts[i][0], pts[i][1]));
+      g.closePath(); g.stroke();
+    }
+    g.globalAlpha = 1;
+  }
+
   g.fillStyle = css("--muted"); g.font = "11px ui-monospace, monospace";
-  g.fillText(`${poles} poles   ${ri.toFixed(1)}–${ro.toFixed(1)} mm`, 8, h - 8);
-  if (loft) g.fillText("solid: gap face    dashed: yoke", 8, h - 22);
+  let line = h - 8;
+  g.fillText(`${poles} poles   ${ri.toFixed(1)}–${ro.toFixed(1)} mm`, 8, line); line -= 14;
+  if (W) {
+    if (W.error) { g.fillStyle = css("--warn"); g.fillText(`no winding: ${W.error}`, 8, line); line -= 14; }
+    else if (W.plan) {
+      const P = W.plan;
+      g.fillText(`${P.coils} coils x ${P.turns} turns   ${P.mode}   fill ${(P.fillFraction * 100).toFixed(0)}%` +
+                 ` of ${P.depth_mm.toFixed(2)} mm   stopped on ${P.stopped}`, 8, line);
+      line -= 14;
+    }
+    g.fillStyle = css("--muted");
+  }
+  if (showPoles && loft) g.fillText("solid: gap face    dashed: yoke", 8, line);
 }
 
 function arcOutline(ri, ro, centre, span) {
@@ -342,6 +422,18 @@ function varTable(e, d) {
     ["gap cells", fmt(m.gapCells, 3)], ["CG iterations", m.iterations ?? "—"],
     ["solves", `${e.cost?.solves ?? "—"} in ${((e.cost?.elapsed_ms || 0) / 1000).toFixed(2)} s`]
   ];
+  /* The winding, re-derived rather than read from the metrics: the turn count is an output of the
+   * routing now, and a design rejected before it was ever meshed has no metrics to read it from. */
+  const W = windingFor(e.hash, d.spec);
+  const wrows = W.plan
+    ? [["coil outline", W.plan.mode], ["turns per coil", W.plan.turns],
+       ["fill fraction", (W.plan.fillFraction * 100).toFixed(0) + " %"],
+       ["room in the outline", W.plan.depth_mm.toFixed(3) + " mm"],
+       ["wound to", W.plan.filled_mm.toFixed(3) + " mm"],
+       ["stopped on", W.plan.stopped]]
+    : W.missing ? [["winding", "no design saved"]]
+    : [["winding", "unroutable: " + W.error]];
+
   const failed = (e.gates || []).filter(g => !g.pass);
   const gates = failed.length
     ? `<div class="gates">${failed.map(g => `<div class="bad">✕ ${g.name}${g.detail ? ": " + g.detail : ""}</div>`).join("")}</div>`
@@ -350,7 +442,7 @@ function varTable(e, d) {
     ? `<table class="vars">${Object.entries(e.vars).map(([k, v]) =>
         `<tr><th>${k}</th><td>${(+v).toFixed(4)}</td></tr>`).join("")}</table>`
     : "";
-  return `<dl class="metrics">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>${gates}` +
+  return `<dl class="metrics">${rows.concat(wrows).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>${gates}` +
     (vars ? `<div class="vecblock"><h4>design vector</h4>${vars}</div>` : "") +
     (d.record?.results?.quality?.length ? `<h4>quality</h4>${d.record.results.quality.map(f => `<div class="${f.level === "error" ? "bad" : "warn"}">${f.message}</div>`).join("")}` : "");
 }
@@ -375,6 +467,7 @@ async function boot() {
     : `<option value="">no runs found</option>`;
   $("#runs").onchange = () => $("#runs").value && openRun($("#runs").value);
   $("#mode").onchange = () => { state.mode = $("#mode").value; state.index = 0; rebuild(); };
+  $("#layers").onchange = () => { state.layers = $("#layers").value; show(); };
   $("#tier").onchange = () => { state.tier = $("#tier").value; state.index = 0; rebuild(); };
   $("#scrub").oninput = () => { state.index = +$("#scrub").value; show(); };
   $("#prev").onclick = () => step(-1);
@@ -395,6 +488,7 @@ async function boot() {
   if (want.get("frames")) document.body.classList.add("frames");
   if (pick) { $("#runs").value = pick; await openRun(pick); }
   if (want.get("mode")) { state.mode = want.get("mode"); $("#mode").value = state.mode; rebuild(); }
+  if (want.get("layers")) { state.layers = want.get("layers"); $("#layers").value = state.layers; show(); }
   RUNVIEW.ready = true;
 }
 
@@ -419,6 +513,7 @@ const RUNVIEW = {
   async goto(i) { state.index = Math.max(0, Math.min(state.view.length - 1, i | 0)); await show(); return RUNVIEW.current; },
   open: openRun,
   setMode(m) { state.mode = m; state.index = 0; rebuild(); },
+  setLayers(l) { state.layers = l; return show(); },
   setTier(t) { state.tier = t; state.index = 0; rebuild(); }
 };
 window.RUNVIEW = RUNVIEW;

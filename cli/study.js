@@ -144,9 +144,14 @@ function makeEvaluator({ host, archive, study, stats, log }) {
     const pre = gateDesign(norm, null, study.objective);
     if (!pre.feasible) {
       stats.rejected++;
+      /* The spec goes down even though nothing was solved. A design rejected on its geometry is one
+       * of the more interesting things in the archive — it is a shape the search reached for and
+       * could not have — and without its spec the viewer has a gate message and no picture of what
+       * tripped it. It costs a kilobyte on the few per cent of designs that fail a gate. */
       return archive.record({ hash, key: key === hash ? undefined : key, stage, tier, tag, vars, x,
                               score: null, feasible: false,
-                              rejectedBefore: "solve", gates: pre.gates, metrics: null, cost: { solves: 0, elapsed_ms: 0 } });
+                              rejectedBefore: "solve", gates: pre.gates, metrics: null, cost: { solves: 0, elapsed_ms: 0 } },
+                            { spec: norm });
     }
 
     const t0 = Date.now();
@@ -160,7 +165,8 @@ function makeEvaluator({ host, archive, study, stats, log }) {
       log(`  design ${hash} failed: ${message}`);
       return archive.record({ hash, key: key === hash ? undefined : key, stage, tier, tag, vars, x,
                               score: null, feasible: false,
-                              error: message, gates: null, metrics: null, cost: { solves: 0, elapsed_ms: wall } });
+                              error: message, gates: null, metrics: null, cost: { solves: 0, elapsed_ms: wall } },
+                            { spec: norm });
     }
 
     const d = r.value.value, rec = d.record;
