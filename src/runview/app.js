@@ -21,10 +21,25 @@ import { footprintCurve, footprintLoft } from "../core/ir.js";
 import { curveFrame, tessellate, loftAt, toPolar, polarToXY } from "../core/curves.js";
 import { specToParams } from "../core/spec.js";
 import { windingPlan, coilPolys } from "../core/geometry.js";
+import { HELP, CHIP_HELP, variableHelp } from "./glossary.js";
 
 const $ = s => document.querySelector(s);
 const fmt = (v, d = 4) => (v === null || v === undefined || !Number.isFinite(v) ? "—" : (+v).toPrecision(d));
 const pct = v => (Number.isFinite(v) ? (v >= 0 ? "+" : "") + v.toFixed(2) + "%" : "—");
+
+/* Every definition reaches the page the same way: as a `title` on the term, from `glossary.js`.
+ * A row whose label has no entry simply has no tooltip rather than a wrong one — and the labels are
+ * the keys, so a row renamed without its help being renamed loses the tooltip visibly instead of
+ * keeping a stale one. The `?` marker is there so a reader knows which terms have a definition
+ * without having to hunt for the cursor change. */
+const esc = t => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+function defRows(rows) {
+  return rows.map(([k, v]) => {
+    const help = HELP[k];
+    return `<dt${help ? ` class="defined" title="${esc(help)}"` : ""}>${k}</dt><dd>${v ?? "—"}</dd>`;
+  }).join("");
+}
+
 
 const state = {
   base: null,          // URL prefix of the run directory
@@ -374,7 +389,31 @@ function drawTrace(canvas, current) {
   g.fillStyle = css("--muted"); g.font = "11px ui-monospace, monospace";
   g.fillText(`${fmt(y1)}`, 3, pad - 6);
   g.fillText(`${fmt(y0)}`, 3, h - 6);
-  g.fillText(stages.map((s, i) => s).join("  ·  "), pad + 4, 12);
+  legend(g, w, h, stages, palette);
+}
+
+/* The stage names, in the colours their points are actually drawn in — which is what makes the
+ * scatter readable, since the shape of a scan and the shape of a CMA-ES climb are only
+ * distinguishable once you know which colour is which. Along the bottom, right-aligned, because the
+ * top-left corner already belongs to the axis label.
+ *
+ * It abbreviates rather than overflowing. Eight stage names do not fit across 300 px, and a name
+ * clipped by the edge of the canvas is worse than a short one: the reader cannot tell whether
+ * `ladd` is a truncation or the end of the list. */
+function legend(g, w, h, stages, palette) {
+  const GAP = 8, LEFT = 56;
+  const widthOf = names => names.reduce((a, n) => a + g.measureText(n).width + GAP, 0) - GAP;
+  let names = stages;
+  for (const n of [Infinity, 6, 4, 3]) {
+    names = n === Infinity ? stages : stages.map(s => s.slice(0, n));
+    if (widthOf(names) <= w - LEFT - 6) break;
+  }
+  let x = Math.max(LEFT, w - 3 - widthOf(names));
+  for (let i = 0; i < names.length; i++) {
+    g.fillStyle = palette[i % palette.length];
+    g.fillText(names[i], x, h - 6);
+    x += g.measureText(names[i]).width + GAP;
+  }
 }
 
 /* ---- text --------------------------------------------------------------------------------------- */
@@ -383,7 +422,7 @@ function runSummary(m, ledger) {
   const solves = ledger.reduce((a, e) => a + (e.cost?.solves || 0), 0);
   const secs = ledger.reduce((a, e) => a + (e.cost?.elapsed_ms || 0), 0) / 1000;
   const nf = m.noiseFloor?.floor_pct;
-  return [
+  return defRows([
     ["study", m.study], ["objective", m.objective], ["adapter", m.adapter],
     ["status", m.status], ["started", (m.started || "").replace("T", " ").slice(0, 19)],
     ["evaluations", ledver(ledger.length, m.cacheHits)], ["field solves", solves.toLocaleString()],
@@ -391,7 +430,7 @@ function runSummary(m, ledger) {
     ["noise floor", nf === null || nf === undefined ? "—" : nf.toFixed(2) + "%"],
     ["loss budget", m.lossBudget_W ? m.lossBudget_W.toFixed(2) + " W" : "—"],
     ["best", fmt(m.bestScore)], ["commit", (m.commit || "").slice(0, 8)]
-  ].map(([k, v]) => `<dt>${k}</dt><dd>${v ?? "—"}</dd>`).join("");
+  ]);
 }
 const ledver = (n, hits) => `${n}${hits ? ` (+${hits} cached)` : ""}`;
 
@@ -399,9 +438,12 @@ function headline(e) {
   const m = e.metrics || {};
   const best = state.manifest?.bestScore;
   const rel = best && e.score !== null ? (e.score - best) / Math.abs(best) * 100 : null;
-  return `<strong>${fmt(e.score, 5)}</strong> <span class="unit">${e.objective || "score"}</span>` +
-    `<span class="chip">${e.stage}</span><span class="chip">${e.tier}</span>` +
-    `<span class="chip">seq ${e.seq}</span>` +
+  const objHelp = HELP[({ shear_kPa: "shear", torque_mNm: "mean torque" })[e.objective]] || HELP["objective"];
+  return `<strong title="${esc(objHelp)}">${fmt(e.score, 5)}</strong> ` +
+    `<span class="unit" title="${esc(objHelp)}">${e.objective || "score"}</span>` +
+    `<span class="chip" title="${esc(CHIP_HELP.stage)}">${e.stage}</span>` +
+    `<span class="chip" title="${esc(CHIP_HELP.tier)}">${e.tier}</span>` +
+    `<span class="chip" title="${esc(CHIP_HELP.seq)}">seq ${e.seq}</span>` +
     (e.score === null ? `<span class="chip bad">${e.rejectedBefore ? "rejected before " + e.rejectedBefore : "no score"}</span>` : "") +
     (rel !== null && rel < 0 ? `<span class="chip">${pct(rel)} of best</span>` : rel === 0 ? `<span class="chip good">best of the run</span>` : "") +
     (Number.isFinite(m.ripple_pct) ? `<span class="chip">ripple ${m.ripple_pct.toFixed(1)}%</span>` : "");
@@ -438,11 +480,16 @@ function varTable(e, d) {
   const gates = failed.length
     ? `<div class="gates">${failed.map(g => `<div class="bad">✕ ${g.name}${g.detail ? ": " + g.detail : ""}</div>`).join("")}</div>`
     : `<div class="gates"><div class="good">✓ every gate passed</div></div>`;
+  /* The design vector's help is generated from the study's own declaration in the manifest, so a
+   * study that renames a variable or moves a bound documents itself. */
+  const spec = state.manifest?.studySpec;
   const vars = e.vars
-    ? `<table class="vars">${Object.entries(e.vars).map(([k, v]) =>
-        `<tr><th>${k}</th><td>${(+v).toFixed(4)}</td></tr>`).join("")}</table>`
+    ? `<table class="vars">${Object.entries(e.vars).map(([k, v]) => {
+        const help = variableHelp(k, +v, spec);
+        return `<tr><th class="defined" title="${esc(help)}">${k}</th><td>${(+v).toFixed(4)}</td></tr>`;
+      }).join("")}</table>`
     : "";
-  return `<dl class="metrics">${rows.concat(wrows).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>${gates}` +
+  return `<dl class="metrics">${defRows(rows.concat(wrows))}</dl>${gates}` +
     (vars ? `<div class="vecblock"><h4>design vector</h4>${vars}</div>` : "") +
     (d.record?.results?.quality?.length ? `<h4>quality</h4>${d.record.results.quality.map(f => `<div class="${f.level === "error" ? "bad" : "warn"}">${f.message}</div>`).join("")}` : "");
 }

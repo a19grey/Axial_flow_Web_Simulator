@@ -233,3 +233,36 @@ A ladder rung refines **every** shape in the design, so a co-design study takes 
 four stations to eight in the same step and re-enters at exactly the score it left at. The rung logs
 that drift; anything other than zero means the rebuild lost a shape, and `tests/study.js` section 4b
 holds the case down.
+
+## The viewer explains itself
+
+Every term `runs.html` prints carries a definition on hover, and the page has a written section
+&mdash; *What this is, and what every word on it means* &mdash; covering what the tool is, what a
+score is, how a run is organized, and what to distrust about the numbers. Both are in the page
+rather than in this file on purpose: the audience is a person hovering and an agent reading the DOM,
+and they want the same thing in the same place.
+
+The fixed vocabulary &mdash; metrics, the winding plan, the run manifest &mdash; lives in
+`src/runview/glossary.js`, keyed by the label the viewer prints. A row renamed without its entry
+loses its tooltip visibly instead of keeping a stale one.
+
+The **design vector documents itself**. A study names its own variables, so nothing in the viewer
+can know them; but the archive keeps the study's own declaration in `run.json` under `studySpec`,
+bounds and `writes` expressions included, so hovering `gapOverRo` reports the field it writes, the
+expression it writes through, its bounds, and where in that range this particular design sits. Rename
+a variable or move a bound and the help follows. The only prose is for the two conventions a shape
+group's members follow, which belong to the shape language rather than to any study.
+
+That last part earns its keep: it surfaces bound-pinning without anybody going to the ledger. The
+best design of `20260929-231240-traced-coil-shape` reports `gapOverRo` on its lower bound,
+`poleHeightOverGap` on its upper, and `yokeOverRo` near its upper &mdash; three statements that the
+design box was in the way, visible by hovering rather than by querying. A bound that is structural
+rather than arbitrary says so instead: an edge chain pinned at zero has collapsed onto the feature's
+own centre line, which is as far as it can go without crossing the other side, and widening that
+would not be a bigger box but a self-crossing outline.
+
+`tests/runview.js` holds all of it down against a synthetic archive &mdash; no GPU, no study, half a
+second &mdash; and runs in CI. It checks that no term is undefined, that none of the definitions is a
+restatement of its own label, that a scalar's bounds come from the study rather than from the page,
+that the two kinds of pinned bound are distinguished, that free control points produced by a ladder
+rung get no invented range, and that a rejected design's panel still routes its winding.

@@ -45,6 +45,13 @@ jobs:
         timeout-minutes: 6
         run: node cli/run.js validate --allow-software --quiet --set mesh.cellsAcrossDiameter=80
 
+      # The run viewer, against a synthetic archive: every number it prints must carry a definition,
+      # and the design vector's help must still be derivable from a study's own declaration. Chromium
+      # but no GPU and no solve, so it is half a second.
+      - name: Run viewer explains itself
+        timeout-minutes: 3
+        run: node tests/runview.js
+
       - name: Full-page smoke test
         timeout-minutes: 8
         run: node tests/smoke-ui.js --allow-software

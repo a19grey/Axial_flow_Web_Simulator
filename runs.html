@@ -50,7 +50,9 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px}
 canvas{display:block;width:100%;background:transparent}
 #plan{height:min(52vh,520px)}
-#loft{height:150px}
+/* The two small canvases are stacked; without the gap the loft's bottom label and the trace's
+   legend sit on adjacent pixels and read as one line. */
+#loft{height:150px;margin-bottom:10px}
 #trace{height:130px}
 .stage{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px}
 .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
@@ -67,6 +69,13 @@ input[type=range]{flex:1;min-width:160px}
 .chip.bad{color:var(--warn);border-color:var(--warn)}
 dl{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;margin:0;font-size:13px}
 dt{color:var(--muted)}
+/* A term with a definition is marked, not merely hoverable: a dotted underline and a help cursor, so
+   a reader can see which words have an answer behind them without sweeping the mouse over all of
+   them. `title` is deliberate rather than a custom popover — it is what a screen reader announces,
+   what a long-press gives on a touch device, and what an agent reading the DOM finds. */
+dt.defined,th.defined{text-decoration:underline dotted var(--line);text-underline-offset:3px;cursor:help}
+dt.defined:hover,th.defined:hover{color:var(--ink);text-decoration-color:var(--muted)}
+#headline .chip,#headline strong,#headline .unit{cursor:help}
 dd{margin:0;font-variant-numeric:tabular-nums;text-align:right}
 h4{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:14px 0 4px}
 table.vars{width:100%;border-collapse:collapse;font:12px/1.5 ui-monospace,monospace}
@@ -76,6 +85,21 @@ table.vars td{text-align:right;font-variant-numeric:tabular-nums}
 .good{color:var(--good)} .bad{color:var(--warn)} .warn{color:var(--warn);opacity:.85}
 #status{font-size:13px;color:var(--muted);min-height:18px}
 footer{padding:0 20px 30px;color:var(--muted);font-size:13px;max-width:96ch}
+/* The manual, in the page. Collapsed by default so it costs a returning reader nothing, but it is
+   real DOM either way, so an agent reading this page gets the vocabulary without opening it. */
+#about{grid-column:1/-1}
+#about summary{cursor:pointer;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+#about summary:hover{color:var(--ink)}
+#about .body{max-width:92ch;margin-top:12px;font-size:14px}
+#about h3{font-size:14px;margin:18px 0 6px}
+#about h3:first-child{margin-top:0}
+#about p{margin:0 0 9px}
+#about dl.defs{grid-template-columns:auto 1fr;gap:4px 14px;font-size:13.5px;margin:0 0 10px}
+#about dl.defs dt{font-weight:600;color:var(--ink);white-space:nowrap}
+#about dl.defs dd{text-align:left;font-variant-numeric:normal;color:var(--muted)}
+#about ul{margin:0 0 10px;padding-left:20px}
+#about li{margin:3px 0}
+body.frames #about{display:none}
 code{font:12px ui-monospace,monospace;background:var(--bg);padding:1px 4px;border-radius:3px}
 /* ?frames=1 strips the chrome and leaves the frame: the shape on the left, the numbers that make it
    evidence on the right. The metrics panel stays, because a movie of shapes with no numbers is a
@@ -107,10 +131,10 @@ body.frames .vecblock{display:none}
   is redrawn from its own saved design, so a whole night scrubs like video. Runs are written by
   <code>cli/study.js</code> on your own machine and stay there; this page reads them.</p>
   <div class="pick">
-    <select id="runs" style="min-width:min(46ch,60vw)"></select>
-    <button id="reload">reload</button>
+    <select id="runs" style="min-width:min(46ch,60vw)" title="the runs found in the mounted folder, newest first, with each one’s best score and status"></select>
+    <button id="reload" title="re-read the run from disk. A study still running appends to its ledger, so this picks up what it has found since.">reload</button>
     <span id="status"></span>
-    <span class="rootline">reading <span id="root">&hellip;</span></span>
+    <span class="rootline" title="the folder these runs are being read from — outside the repository, on the machine that made them">reading <span id="root">&hellip;</span></span>
   </div>
 </header>
 
@@ -141,31 +165,31 @@ cd Axial_flow_Web_Simulator &amp;&amp; npm install</pre></li>
   <section class="panel" id="viewer">
     <div id="headline"></div>
     <div class="stage">
-      <canvas id="plan" title="looking down the shaft: rotor poles and stator coils"></canvas>
+      <canvas id="plan" title="The machine looked at down the shaft. Rotor pole footprints are traced through the same curve code the rasterizer used, at the heights the loft makes widest and narrowest, so a flare shows as two outlines. The coils are the real routed turns, coloured by phase — the same polygons that became Biot-Savart segments."></canvas>
       <div>
-        <canvas id="loft" title="the pole's radial extent against height"></canvas>
-        <canvas id="trace" title="every scored evaluation on this tier"></canvas>
+        <canvas id="loft" title="The pole seen from the side: its radial extent against height, from the gap face at the bottom to the yoke at the top. A shape that is not a vertical band is one only a printer makes."></canvas>
+        <canvas id="trace" title="Every scored evaluation on this tier in the order it was tried, with the design on screen marked. The shape of the cloud is the search: scattered during the scan, banded during a CMA-ES climb."></canvas>
       </div>
     </div>
     <div class="controls">
-      <button id="prev">←</button><button id="next">→</button>
-      <button id="play">play</button>
-      <input id="scrub" type="range" min="0" max="0" value="0">
-      <span id="counter">0 / 0</span>
-      <label style="color:var(--muted);font-size:12px">fps <input id="fps" type="number" value="6" min="1" max="60" style="width:56px"></label>
-      <select id="mode" title="which designs to flip through">
+      <button id="prev" title="previous design (left arrow)">←</button><button id="next" title="next design (right arrow)">→</button>
+      <button id="play" title="step through the sequence automatically (space)">play</button>
+      <input id="scrub" type="range" min="0" max="0" value="0" title="scrub through the sequence">
+      <span id="counter" title="position in the current sequence, which is shorter than the run: the mode and tier pickers filter it">0 / 0</span>
+      <label style="color:var(--muted);font-size:12px">fps <input id="fps" type="number" value="6" min="1" max="60" style="width:56px" title="playback rate. Nothing is re-solved, so this is limited only by how fast the outlines redraw"></label>
+      <select id="mode" title="Which designs to flip through. Improvements only is the storyboard — one design per time the score got better, which is the sequence that tells a story. Every scored design is the search itself. Everything also includes the designs rejected before they were ever meshed, which are the shapes the search reached for and could not have.">
         <option value="best">improvements only</option>
         <option value="feasible">every scored design</option>
         <option value="all">everything, rejections included</option>
       </select>
-      <select id="layers" title="what to draw in the plan view">
+      <select id="layers" title="Which half of the machine the plan view draws. Over each other the rotor drops to a neutral wash so the copper under it stays legible; alone, each is drawn at full strength.">
         <option value="both">coils over rotor</option>
         <option value="wires">coils only</option>
         <option value="rotor">rotor only</option>
       </select>
-      <select id="tier" title="evaluation tier"></select>
-      <button id="open" class="primary">open in the tool</button>
-      <button id="download">save spec</button>
+      <select id="tier" title="Which mesh’s evaluations to look at. screen is coarse and cheap, score is the search’s working mesh, confirm is fine and is only spent on the finalists. Scores from different tiers are different numbers about the same design and are not comparable."></select>
+      <button id="open" class="primary" title="hand this design’s spec to the field solver, which will actually solve it — nothing on this page does">open in the tool</button>
+      <button id="download" title="download this design as the JSON the solver and the CLI both read">save spec</button>
     </div>
   </section>
 
@@ -175,6 +199,107 @@ cd Axial_flow_Web_Simulator &amp;&amp; npm install</pre></li>
     <h4>this design</h4>
     <div id="vars"></div>
   </aside>
+
+  <details class="panel" id="about">
+    <summary>What this is, and what every word on it means</summary>
+    <div class="body">
+      <h3>The tool</h3>
+      <p>This project is a magnetostatic field solver for axial-flux motors that runs entirely in a
+      browser on WebGPU, plus a headless driver that points it at an optimizer and leaves it running
+      overnight. A <em>study</em> declares a baseline machine, a set of design variables with bounds,
+      an objective, and manufacturing gates; the driver then searches that space for hours and writes
+      every design it tried to a run archive. This page reads one of those archives back. It solves
+      nothing &mdash; every outline here is redrawn from its design&rsquo;s own saved spec through the
+      same curve and routing code the solver rasterized it with, which is why a night&rsquo;s search
+      scrubs like video. To see fields, open a design in the solver.</p>
+
+      <h3>What a score is</h3>
+      <p>Every design is scored at <strong>equal copper loss</strong>, not equal current. The baseline
+      machine&rsquo;s own loss becomes the run&rsquo;s budget, and each variant is handed whatever
+      current puts it on that budget &mdash; so a design that wins is one that makes more torque out
+      of the same heat, rather than one that was quietly given more amps. The objective is usually
+      <em>shear</em> rather than torque, because dividing by the swept area makes it size-free and
+      stops a bigger machine from winning for being bigger. Torque is averaged over a full ripple
+      period, and the current phase is chosen in closed form rather than swept.</p>
+
+      <h3>Reading a design vector</h3>
+      <p>Variables are declared as <strong>ratios, not millimetre lengths</strong>. That is what makes
+      a result transferable to another diameter instead of true only at this one, and it removes most
+      of the coupling between variables, which makes the space far easier to search. <code>ro</code>
+      below is the baseline&rsquo;s outer radius.</p>
+      <dl class="defs">
+        <dt>riOverRo</dt><dd>the stator&rsquo;s inner radius over its outer radius &mdash; how much
+          of the disc is active annulus and how much is bore</dd>
+        <dt>gapOverRo</dt><dd>the mechanical air gap between the rotor pole face and the board, over
+          the outer radius. The single most influential variable in every study so far.</dd>
+        <dt>poleHeightOverGap</dt><dd>the rotor pole&rsquo;s axial height in units of the air gap
+          &mdash; how tall the iron is compared with the distance it has to reach across</dd>
+        <dt>yokeOverRo</dt><dd>the rotor&rsquo;s back-iron thickness over the outer radius &mdash;
+          how much return path the flux is given</dd>
+        <dt>fill</dt><dd>how far into the coil outline to wind, as a fraction of the room the outline
+          actually has. The turn count is an <em>output</em> of this, not an input.</dd>
+      </dl>
+      <p>The rest of a vector describes <em>shapes</em>, in normalized wedge coordinates where
+      <code>u</code> runs 0 at a feature&rsquo;s inner radius to 1 at its outer, and <code>v</code> is
+      the angle in units of the feature&rsquo;s own pitch &mdash; so <code>v = &plusmn;0.5</code> is
+      where neighbouring poles or coils would touch.</p>
+      <dl class="defs">
+        <dt>pole.*, coil.*</dt><dd>a closed outline. <code>trail<em>n</em></code> and
+          <code>lead<em>n</em></code> are the two sides at station <em>n</em>, marching from the inner
+          radius outward; the pair cannot cross, so the shape is always simple. After a ladder rung
+          they become free control points, <code>v<em>n</em></code>, and the shape is no longer
+          obliged to be two monotone sides.</dd>
+        <dt>sweep.*</dt><dd>the loft: how a rotor pole&rsquo;s footprint changes as it climbs from the
+          gap face to the yoke. <code>scale</code> grows or pinches it, <code>widen</code> fans it
+          angularly without growing it radially, <code>twist</code> swings its centre line. Each is a
+          short B&eacute;zier against height, so one value is a constant, two a ramp, and three a
+          flare or a waist &mdash; shapes a printer makes and a lamination or a mould cannot.</dd>
+      </dl>
+      <p>Hover any row in the panel on the right and you get that variable&rsquo;s definition built
+      from the study&rsquo;s own declaration: what it writes, through what expression, between what
+      bounds, and where in its range this particular design sits. A variable pinned to a bound is the
+      search telling you the bound is in the way.</p>
+
+      <h3>How a run is organized</h3>
+      <p>A study runs in stages, and they are not interchangeable:</p>
+      <ul>
+        <li><strong>baseline</strong> &mdash; score the starting design; its copper loss becomes the
+          budget every later design is held to.</li>
+        <li><strong>noise</strong> &mdash; score the same design at two or three mesh refinements, to
+          measure how much the score moves for reasons that are not the design. No later improvement
+          smaller than this floor means anything.</li>
+        <li><strong>screen</strong> &mdash; nudge each variable alone and rank them by the swing, so
+          the ones that do nothing can be set aside with the measurement kept.</li>
+        <li><strong>scan</strong> &mdash; a space-filling sample on the cheap mesh, to find basins
+          rather than to find an optimum.</li>
+        <li><strong>rankcheck</strong> &mdash; re-score the scan&rsquo;s best on the finer mesh and
+          check the ordering survives. This is the stage that earns the right to screen cheaply.</li>
+        <li><strong>refine</strong> &mdash; CMA-ES from the best basins.</li>
+        <li><strong>ladder</strong> &mdash; double the control points of every shape in the design and
+          restart at exactly the same design, so each rung only has to buy what its extra freedom is
+          worth. A rung whose gain is inside the noise floor is where refining stops paying.</li>
+        <li><strong>confirm</strong> &mdash; the finalists on the fine mesh, with the convergence
+          evidence attached. A design that does not survive refinement was never a design.</li>
+      </ul>
+      <p>Runs are resumable and append-only: every finished evaluation is cached by the hash of its
+      normalized spec, so stopping a study and re-running it with <code>--resume</code> costs nothing.
+      The archive format, the ledger schema and the <code>jq</code> queries that answer questions
+      about a run are documented in <code>docs/runs.md</code>.</p>
+
+      <h3>What to distrust</h3>
+      <ul>
+        <li><strong>The absolute numbers.</strong> The loss budget is far above what a board this size
+          would survive thermally. Shear at fixed loss is very nearly scale-free, so the
+          <em>ranking</em> transfers; the watts do not.</li>
+        <li><strong>Linear iron.</strong> The solver is linear, so nothing saturates. A peak B far
+          above ~1.5 T is a field real steel would not give the design.</li>
+        <li><strong>Ripple.</strong> Reported, never constrained. A design can win here by being
+          violently uneven.</li>
+        <li><strong>Mesh, not physics.</strong> Surface spread is the disagreement between two
+          independent stress surfaces in the same field; treat it as the error bar on the score.</li>
+      </ul>
+    </div>
+  </details>
 </main>
 
 <footer>
