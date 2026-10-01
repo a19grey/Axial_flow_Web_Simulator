@@ -1,0 +1,142 @@
+{
+  "study": "codesign-both-halves",
+  "notes": "Both halves at once. The two studies before this each froze one half and moved the other: printed-rotor-shape asked what shape a pole should be against a fixed 7-turn coil, traced-coil-shape asked what shape a coil should be against a fixed hook pole. Each answer is only true of the half it was measured against, and the two halves are not independent - a pole's footprint decides where the flux crosses the gap and a coil's outline decides where the current is to meet it, so the best pole for one coil is not the best pole for another. This study gives the search both at the same time: the rotor's footprint and its loft, the coil's outline and how far in it is wound, and the four ratios the machine is built on. 28 variables, which is a real jump, and the honest expectation is that joint search is harder per dimension than either half alone - so the result to read is not just the final number but whether it beats the better of the two frozen-half optima, which were 0.0252 kPa (rotor free) and 0.0353 kPa (coil free) on this same baseline and the same loss budget.\n\nThe constraint is still equal heat. Every design is scored at the baseline's own copper loss, with the current solved for rather than given, so a variant that wins is one that makes more shear out of the same watts and not one that was handed more amps. The budget is far above anything a board this size would survive thermally, but shear at fixed loss is very nearly scale-free in it, so the ranking is what transfers and the absolute number is not meant to be read as a machine that exists.\n\nTwo bounds moved from the earlier studies, because the earlier searches ran into them and stayed there. gapOverRo now bottoms out exactly where the process gate does, at 0.8 mm, so the lower bound is the manufacturing limit rather than an arbitrary one - if the search pins there again, that is a finding about the gap and not about the box. poleHeightOverGap goes to 9 for the same reason: traced-coil-shape finished at 4.48 against a ceiling of 4.5.\n\nOne ladder rung rather than two. Refining both outlines takes 28 variables to 44, and a second rung would take it to 76, which this budget cannot search well enough for the rung's gain to mean anything. One rung still answers the question the ladder is asked - whether more freedom in the outlines is worth more than the noise floor - and answers it for both halves at once.",
+  "baseline": "../src/cases/printed-rotor-demo.json",
+  "overrides": {
+    "design": {
+      "rotor": {
+        "poleBounds": {
+          "maxRadius_mm": 52,
+          "maxPitchFraction": 1
+        }
+      },
+      "stator": {
+        "turnsPerLayer": null,
+        "coilCurve": {
+          "trailing": [-0.30, -0.40, -0.43, -0.38],
+          "leading": [0.38, 0.43, 0.40, 0.30],
+          "u0": 0.03,
+          "u1": 0.97
+        }
+      }
+    }
+  },
+  "seed": 20260930,
+  "objective": {
+    "maximize": "shear_kPa",
+    "maxSurfaceSpread_pct": 10,
+    "maxSuperpositionError_pct": 1,
+    "process": {
+      "minTraceWidth_mm": 0.15,
+      "minTraceSpacing_mm": 0.15,
+      "layerOptions": [2, 4, 6, 8],
+      "minPrintedFeature_mm": 0.8,
+      "minPrintedWall_mm": 1.2,
+      "minAirGap_mm": 0.8
+    }
+  },
+  "tiers": {
+    "screen": {
+      "mesh": {
+        "activeCellsAcrossDiameter": 96,
+        "cellsAcrossAirGap": 5,
+        "cellsAcrossPoleArc": 48,
+        "cellsAcrossPoleHeight": 3
+      }
+    },
+    "score": {},
+    "confirm": {
+      "mesh": {
+        "activeCellsAcrossDiameter": 200,
+        "cellsAcrossAirGap": 10,
+        "cellsAcrossPoleArc": 128,
+        "cellsAcrossPoleHeight": 6
+      }
+    }
+  },
+  "variables": [
+    {
+      "name": "riOverRo",
+      "min": 0.35,
+      "max": 0.7,
+      "init": 0.423,
+      "writes": [{ "path": "design.stator.innerRadius_mm", "expr": "riOverRo * ro" }]
+    },
+    {
+      "name": "gapOverRo",
+      "min": 0.015385,
+      "max": 0.075,
+      "init": 0.0385,
+      "writes": [{ "path": "design.rotor.airGap_mm", "expr": "gapOverRo * ro" }]
+    },
+    {
+      "name": "poleHeightOverGap",
+      "min": 1.0,
+      "max": 9.0,
+      "init": 2.5,
+      "writes": [{ "path": "design.rotor.poleHeight_mm", "expr": "poleHeightOverGap * gapOverRo * ro" }]
+    },
+    {
+      "name": "yokeOverRo",
+      "min": 0.05,
+      "max": 0.14,
+      "init": 0.0769,
+      "writes": [{ "path": "design.rotor.yokeThickness_mm", "expr": "yokeOverRo * ro" }]
+    },
+    {
+      "name": "fill",
+      "min": 0.2,
+      "max": 1.0,
+      "init": 0.85,
+      "path": "design.stator.fillFraction"
+    },
+    {
+      "kind": "footprint",
+      "name": "pole",
+      "target": "design.rotor.poleCurve",
+      "stations": 4,
+      "maxV": 0.4,
+      "u0": 0.1,
+      "u1": 0.9,
+      "chordTolerance_mm": 0.004,
+      "init": 0.26
+    },
+    {
+      "kind": "loft",
+      "name": "sweep",
+      "target": "design.rotor.poleLoft",
+      "pivot": 0.5,
+      "channels": { "scale": 3, "widen": 2, "twist": 2 },
+      "scaleRange": [0.6, 1.2],
+      "widenRange": [0.6, 1.15]
+    },
+    {
+      "kind": "footprint",
+      "name": "coil",
+      "target": "design.stator.coilCurve",
+      "stations": 4,
+      "maxV": 0.45,
+      "u0": 0.03,
+      "u1": 0.97,
+      "chordTolerance_mm": 0.004,
+      "init": 0.36
+    }
+  ],
+  "stages": [
+    { "kind": "baseline", "tier": "score" },
+    { "kind": "noise", "tier": "screen", "repeats": 2, "refinements": [1, 1.4, 2] },
+    { "kind": "screen", "tier": "screen", "fraction": 0.3, "drop": false },
+    { "kind": "scan", "tier": "screen", "points": 700 },
+    { "kind": "rankcheck", "tier": "screen", "against": "score", "count": 40 },
+    { "kind": "refine", "tier": "score", "algorithm": "cmaes", "budget": 1600, "restarts": 3, "sigma0": 0.22 },
+    {
+      "kind": "ladder",
+      "tier": "score",
+      "rungs": [
+        { "algorithm": "cmaes", "budget": 3400, "sigma0": 0.08 }
+      ]
+    },
+    { "kind": "confirm", "tier": "confirm", "count": 6 }
+  ],
+  "budget": { "hours": 8, "evaluations": 20000 }
+}

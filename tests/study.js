@@ -30,6 +30,7 @@ import { patternSearch, cmaes, differentialEvolution, jacobiEigen } from "../src
 import { curveAt } from "../src/core/curves.js";
 import { normalizeSpec, defaultSpec, specHash } from "../src/core/spec.js";
 import { RunArchive, repairLedger } from "../cli/archive.js";
+import { stepLadder } from "../cli/study.js";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const args = process.argv.slice(2);
@@ -255,6 +256,60 @@ function ladder() {
   ok("and a flare is one", lv.loft([1, 1.3, 1, 1, 1, 0, 0]) !== null);
 }
 
+/* ---- 4b. a rung of a study that moves both halves ------------------------------------------------ */
+
+/* `ladderStep` refines one curve; `stepLadder` rebuilds a whole design around it. The two are not
+ * the same claim once a study carries more than one shape. A co-design study has a rotor footprint
+ * and a coil outline in the same vector, and the rung has to refine both, keep each pointed at its
+ * own spec field, and leave the scalars and the loft exactly where they were — because the drift
+ * check the ladder runs afterwards can only be passed by a design that is bit-for-bit the one that
+ * went in. */
+function twoShapeRung() {
+  const base = defaultSpec();
+  const variables = [
+    { name: "gapOverRo", min: 0.02, max: 0.08, init: 0.04,
+      writes: [{ path: "design.rotor.airGap_mm", expr: "gapOverRo * ro" }] },
+    { kind: "footprint", name: "pole", target: "design.rotor.poleCurve", stations: 4, maxV: 0.4 },
+    { kind: "loft", name: "sweep", target: "design.rotor.poleLoft", channels: { scale: 3, widen: 2 } },
+    { kind: "footprint", name: "coil", target: "design.stator.coilCurve", stations: 4, maxV: 0.45 }
+  ];
+  const design = compileDesign(variables, base);
+  const x = design.x0.slice();
+  // Two different shapes, so swapping one for the other would be visible rather than a coincidence.
+  const pole = design.groups.find(g => g.name === "pole"), coil = design.groups.find(g => g.name === "coil");
+  const poleX = [-0.38, -0.11, -0.31, -0.19, 0.08, 0.29, 0.13, 0.25];
+  const coilX = [-0.21, -0.43, -0.17, -0.35, 0.40, 0.12, 0.33, 0.22];
+  for (let i = 0; i < 8; i++) { x[pole.offset + i] = poleX[i]; x[coil.offset + i] = coilX[i]; }
+  x[design.names.indexOf("gapOverRo")] = 0.061;
+
+  const { design: next, x: xs } = stepLadder(design, x, { variables, baselineSpec: base }, {});
+  ok("a rung refines every shape in the design, not the first one",
+     next.dim === design.dim + 16, `${design.dim} -> ${next.dim} variables`);
+
+  let worst = 0;
+  for (const name of ["pole", "coil"]) {
+    const a = design.groups.find(g => g.name === name), b = next.groups.find(g => g.name === name);
+    const ca = a.curve(x.slice(a.offset, a.offset + a.dim));
+    const cb = b.curve(xs.slice(b.offset, b.offset + b.dim));
+    for (let i = 0; i <= 200; i++) {
+      const t = i / 200 * ca.spans;
+      const pa = curveAt(ca, t), pb = curveAt(cb, 2 * t);
+      worst = Math.max(worst, Math.abs(pa.u - pb.u), Math.abs(pa.v - pb.v));
+    }
+  }
+  ok("and each refined shape is the curve it refined, not its neighbour's",
+     worst < 1e-14, `worst deviation ${worst.toExponential(2)}`);
+
+  const before = design.apply(x), after = next.apply(xs);
+  ok("the rotor and the coil still write to their own spec fields",
+     !!after.design.rotor.poleCurve && !!after.design.stator.coilCurve &&
+     after.design.rotor.poleCurve !== after.design.stator.coilCurve);
+  ok("the scalars and the loft cross the rung untouched",
+     after.design.rotor.airGap_mm === before.design.rotor.airGap_mm &&
+     JSON.stringify(after.design.rotor.poleLoft) === JSON.stringify(before.design.rotor.poleLoft));
+  report.cases.twoShapeRung = { dim: design.dim, refinedDim: next.dim, worstDeviation: worst };
+}
+
 /* ---- 5. samplers and searchers ------------------------------------------------------------------ */
 
 function searchers() {
@@ -470,6 +525,7 @@ process.stderr.write("\n2. gates and the score\n"); gates();
 process.stderr.write("\n3. design variables\n"); variables();
 process.stderr.write("\n3b. containment\n"); containmentGate();
 process.stderr.write("\n4. the shape ladder\n"); ladder();
+process.stderr.write("\n4b. a rung with two shapes in it\n"); twoShapeRung();
 process.stderr.write("\n5. samplers and searchers\n"); await searchers();
 process.stderr.write("\n6. the run archive\n"); archive();
 if (!flag("cpu-only")) { process.stderr.write("\n7. through a solve\n"); await throughASolve(); }

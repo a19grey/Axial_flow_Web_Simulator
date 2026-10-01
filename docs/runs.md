@@ -212,3 +212,24 @@ stages. `studies/printed-rotor-shape.json` is the worked example and is commente
 described at the top of `cli/study.js`, and what a score *is* — the closed-form current phase, the
 mean over the ripple period, the fixed copper-loss budget — is derived at the top of
 `src/study/operatingPoint.js`.
+
+Three studies ship, and they differ in which half of the machine is allowed to move:
+
+| study | rotor | stator | variables |
+|---|---|---|---|
+| `printed-rotor-shape` | footprint + loft free | fixed 7-turn coil | 19 |
+| `traced-coil-shape` | fixed hook pole | outline + fill free | 11 |
+| `codesign-both-halves` | footprint + loft free | outline + fill free | 28 |
+
+The first two each answer a question about one half *given* the other, which is a weaker statement
+than it looks: a pole's footprint decides where the flux crosses the gap and a coil's outline
+decides where the current is to meet it, so the best pole for one coil need not be the best pole for
+another. `codesign-both-halves` moves both at once, and the number to read off it is not the score
+on its own but whether it beats the better of the two frozen-half optima — joint search is harder
+per dimension, so a win is evidence that the halves really are coupled and a loss is evidence that
+28 variables is more than this budget can search.
+
+A ladder rung refines **every** shape in the design, so a co-design study takes both outlines from
+four stations to eight in the same step and re-enters at exactly the score it left at. The rung logs
+that drift; anything other than zero means the rebuild lost a shape, and `tests/study.js` section 4b
+holds the case down.

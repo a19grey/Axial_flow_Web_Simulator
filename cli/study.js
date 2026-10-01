@@ -32,7 +32,8 @@
  *   confirm    the last few designs on the fine mesh, with the convergence evidence
  */
 
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { resolve, dirname, join } from "node:path";
 import { normalizeSpec, specHash, defaultSpec } from "../src/core/spec.js";
 import { compileDesign, discreteCombinations } from "../src/study/design.js";
@@ -488,30 +489,42 @@ function pickStarts(scan, design, n) {
   return starts.length ? starts : [good[0].x];
 }
 
-/* Rebuild the design with the shape variable refined one rung, and the vector that reproduces the
- * incoming design exactly in the larger space. */
-function stepLadder(design, x, study, rung) {
-  const g = design.groups.find(v => v.curve);
-  if (!g) return null;
-  const stepped = ladderStep(g, x.slice(g.offset, g.offset + g.dim), { releaseU: rung.releaseU ?? null });
+/* Rebuild the design with every shape variable refined one rung, and the vector that reproduces the
+ * incoming design exactly in the larger space.
+ *
+ * Every shape, not the first one. A study that co-designs both halves carries two curve groups — a
+ * rotor pole and a coil outline — and refining only one of them would leave the other frozen at four
+ * stations for the rest of the climb, which is not the measurement the ladder is for. Declarations
+ * and groups are built in the same order and `compileDesign` preserves it, so position is the
+ * matching that is always right; names are not, since two unnamed curves would both be called
+ * `control` and collide. */
+export function stepLadder(design, x, study, rung) {
+  const steps = new Map();
+  for (const g of design.groups)
+    if (g.curve) steps.set(g, ladderStep(g, x.slice(g.offset, g.offset + g.dim), { releaseU: rung.releaseU ?? null }));
+  if (!steps.size) return null;
+
+  let gi = 0;
   const decls = study.variables.map(v => {
-    if (v.kind === "footprint" || v.kind === "footprint.twoChain" || v.kind === "footprint.control") {
-      const s = stepped.variable;
-      return { kind: "footprint.control", name: v.name, target: s.target, controlPoints: s.meta.template.control,
-               degree: s.meta.degree, fixU: s.meta.fixU, chordTolerance_mm: s.meta.chordTolerance_mm,
-               uRange: v.uRange, vRange: v.vRange };
-    }
-    return v;
+    if (v.values) return v;                       // discrete: never enters the vector
+    const g = design.groups[gi++];
+    const stepped = g && steps.get(g);
+    if (!stepped) return v;
+    const s = stepped.variable;
+    return { kind: "footprint.control", name: v.name, target: s.target, controlPoints: s.meta.template.control,
+             degree: s.meta.degree, fixU: s.meta.fixU, chordTolerance_mm: s.meta.chordTolerance_mm,
+             uRange: v.uRange, vRange: v.vRange };
   });
   const next = compileDesign(decls, study.baselineSpec);
-  /* Carry every other variable's value across unchanged, and drop the refined shape's own values in
+  /* Carry every other variable's value across unchanged, and drop each refined shape's own values in
    * at its new offset. */
   const xs = next.x0.slice();
-  for (const ng of next.groups) {
-    const og = design.groups.find(o => (o.name || o.kind) === (ng.name || ng.kind));
+  for (let i = 0; i < next.groups.length; i++) {
+    const ng = next.groups[i], og = design.groups[i];
     if (!og) continue;
-    if (ng.curve && og.curve) for (let i = 0; i < ng.dim; i++) xs[ng.offset + i] = stepped.x[i];
-    else if (ng.dim === og.dim) for (let i = 0; i < ng.dim; i++) xs[ng.offset + i] = x[og.offset + i];
+    const stepped = steps.get(og);
+    if (ng.curve && stepped) for (let k = 0; k < ng.dim; k++) xs[ng.offset + k] = stepped.x[k];
+    else if (ng.dim === og.dim) for (let k = 0; k < ng.dim; k++) xs[ng.offset + k] = x[og.offset + k];
   }
   return { design: next, x: xs };
 }
@@ -663,4 +676,7 @@ async function main() {
   if (status === "failed") process.exit(1);
 }
 
-main().catch(e => { process.stderr.write(`\nerror: ${e.message}\n${e.stack || ""}\n`); process.exit(1); });
+/* Only when run as a command. The module is also imported by the tests, which want `stepLadder`
+ * and not a study run with whatever happens to be on their argv. */
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))
+  main().catch(e => { process.stderr.write(`\nerror: ${e.message}\n${e.stack || ""}\n`); process.exit(1); });
