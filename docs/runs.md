@@ -234,6 +234,29 @@ four stations to eight in the same step and re-enters at exactly the score it le
 that drift; anything other than zero means the rebuild lost a shape, and `tests/study.js` section 4b
 holds the case down.
 
+## Reading the plan view
+
+A rotor pole is drawn as two outlines, sometimes three: **solid** is the gap face (the end nearest
+the board, and the only one filled), **dashed** is where the pole meets the yoke, and the offset
+between them *is* the loft.
+
+**Dotted** is an interior section, drawn only when the pole reaches outside the other two. This is
+not a refinement &mdash; without it the picture is wrong for a whole class of shapes. A loft channel
+is a B&eacute;zier against height, and a B&eacute;zier interpolates only its first and last control
+values: `scale: [1, 1.3, 1]` is a pole that bulges 15 % at mid-height and returns to its original
+size at both ends, so its two face outlines are *identical* and it would be drawn as having no loft
+at all, under a caption saying it has one. Even the demo rotor is a milder case &mdash; its widest
+section is at mid-height, 4 % larger than either face.
+
+The test for "reaches outside the pair" is the distance from the segment joining corresponding
+points of the two faces, not from the faces themselves. A monotone taper puts every interior section
+on that segment, and reporting it as a third shape would clutter the picture with something the two
+drawn outlines already imply; a bulge (where the segment degenerates to a point) and a twist that
+swings out and back (where the section bows off the chord) both score above it. The threshold is 1 %
+of the radial span, so the judgement means the same thing at any diameter. `src/runview/loft.js`,
+exercised by `tests/runview.js` section 0 in both directions: every non-monotone loft caught, every
+monotone one left alone.
+
 ## The viewer explains itself
 
 Every term `runs.html` prints carries a definition on hover, and the page has a written section

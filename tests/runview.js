@@ -23,6 +23,9 @@ import { chromium } from "playwright";
 
 import { serveEphemeral } from "../cli/serve.js";
 import { normalizeSpec, specHash } from "../src/core/spec.js";
+import { footprintCurve, footprintLoft } from "../src/core/ir.js";
+import { curveFrame } from "../src/core/curves.js";
+import { loftHeights } from "../src/runview/loft.js";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const args = process.argv.slice(2);
@@ -121,6 +124,53 @@ function fixture() {
   }, null, 2) + "\n");
   return { root, runId: "20260101-000000-glossary-fixture" };
 }
+
+/* ---- which heights a lofted pole is drawn at ---------------------------------------------------- */
+
+/* Pure, so it runs before the browser does.
+ *
+ * A loft channel is a Bezier against height and a Bezier interpolates only its end control values.
+ * So the two face outlines — gap face and yoke — do not bound the shape: `scale: [1, 1.3, 1]` bulges
+ * 15 % at mid-height with *identical* faces, and drawing only the faces shows it as unlofted under a
+ * caption saying it is lofted. The viewer therefore looks for an interior section that reaches
+ * outside the pair. The thing to get right is both directions at once: catch every non-monotone
+ * loft, and stay quiet on every monotone one, where the interior sections lie between the two
+ * outlines a reader can already see. */
+function loftSections() {
+  const demo = JSON.parse(readFileSync(join(ROOT, "src/cases/printed-rotor-demo.json"), "utf8"));
+  const curve = footprintCurve(demo.design.rotor.poleCurve);
+  const frame = curveFrame({ r0: 21, r1: 53, centre: 0, count: 8 });
+  const find = spec => loftHeights(curve, frame, footprintLoft(spec)).find(h => h.kind === "extreme") || null;
+
+  ok("no loft at all is one outline, not three",
+     loftHeights(curve, frame, null).length === 1);
+
+  /* Monotone: every interior section is between the faces, so there is nothing a third line adds. */
+  for (const [what, spec] of [["a taper", { scale: [1, 0.8] }], ["a widening", { widen: [1, 1.2] }],
+                              ["a twist", { twist: [0, 0.045] }]])
+    ok(`${what} that only ramps is drawn as two outlines`, find(spec) === null);
+
+  /* Non-monotone: the interior reaches outside the pair, and in the bulge and waist cases the two
+   * faces are the same outline, so without this the picture would show no loft whatsoever. */
+  const bulge = find({ scale: [1, 1.3, 1] }), waist = find({ scale: [1, 0.7, 1] });
+  ok("a pole that bulges at mid-height and comes back is not drawn as unlofted",
+     bulge !== null && Math.abs(bulge.s - 0.5) < 0.05, bulge ? `found at ${bulge.s.toFixed(2)}` : "missed");
+  ok("and neither is one that waists", waist !== null && Math.abs(waist.s - 0.5) < 0.05);
+  ok("a twist that swings out and back is caught too, which no measure of size would notice",
+     find({ twist: [0, 0.12, 0] }) !== null);
+  ok("the demo rotor's own widest section is interior, and is drawn",
+     find(demo.design.rotor.poleLoft) !== null);
+
+  /* The threshold is relative to the annulus, so it means the same thing at any diameter. */
+  ok("a loft too slight to see is left alone", find({ scale: [1, 1.002, 1] }) === null);
+  const big = loftHeights(curve, curveFrame({ r0: 210, r1: 530, centre: 0, count: 8 }),
+                          footprintLoft({ scale: [1, 1.002, 1] })).find(h => h.kind === "extreme") || null;
+  ok("and that judgement is scale-free: ten times the machine, same answer", big === null);
+
+  report.cases.loftSections = { bulge: bulge && bulge.s, demo: !!find(demo.design.rotor.poleLoft) };
+}
+
+process.stderr.write("\n0. which heights a lofted pole is drawn at\n"); loftSections();
 
 /* ---- the checks --------------------------------------------------------------------------------- */
 

@@ -222,6 +222,30 @@ cd Axial_flow_Web_Simulator &amp;&amp; npm install</pre></li>
       stops a bigger machine from winning for being bigger. Torque is averaged over a full ripple
       period, and the current phase is chosen in closed form rather than swept.</p>
 
+      <h3>Reading the plan view</h3>
+      <p>The machine is drawn looking down the shaft. The faint circles are the stator&rsquo;s active
+      annulus and the faint spokes its coil pitch &mdash; the frame both halves are read against.
+      A rotor pole is drawn as more than one outline, because a pole is a three-dimensional thing
+      seen from above:</p>
+      <dl class="defs">
+        <dt>solid</dt><dd>the pole at the <strong>gap face</strong>, the end nearest the board. This
+          is the one that matters magnetically, and the only one that is filled.</dd>
+        <dt>dashed</dt><dd>the same pole where it meets the <strong>yoke</strong>, the back iron it
+          is attached to. The offset between solid and dashed <em>is</em> the loft: if the dashed
+          outline is smaller, the pole tapers; if it is swung round, the pole is skewed; if it sits
+          exactly on the solid one, the two ends are the same size.</dd>
+        <dt>dotted</dt><dd>an interior section, drawn only when the pole reaches outside the other
+          two. A loft is a B&eacute;zier against height and a B&eacute;zier passes through only its
+          first and last control values, so a pole can bulge or waist in the middle and come back to
+          the same size at both ends &mdash; the two face outlines would then be identical and the
+          shape would look unlofted. The caption says which height it is and how far outside the
+          pair it reaches.</dd>
+      </dl>
+      <p>The coloured loops are the coils, one closed curve per turn, coloured by phase. They are the
+      real routed turns rather than a sketch &mdash; the same polygons that became Biot-Savart
+      segments &mdash; so a coil whose offsets pinch looks pinched. A red dashed circle, when one
+      appears, is the containment bound the rotor is not supposed to reach past.</p>
+
       <h3>Reading a design vector</h3>
       <p>Variables are declared as <strong>ratios, not millimetre lengths</strong>. That is what makes
       a result transferable to another diameter instead of true only at this one, and it removes most

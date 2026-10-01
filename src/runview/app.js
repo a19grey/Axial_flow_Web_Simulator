@@ -22,6 +22,7 @@ import { curveFrame, tessellate, loftAt, toPolar, polarToXY } from "../core/curv
 import { specToParams } from "../core/spec.js";
 import { windingPlan, coilPolys } from "../core/geometry.js";
 import { HELP, CHIP_HELP, variableHelp } from "./glossary.js";
+import { loftHeights } from "./loft.js";
 
 const $ = s => document.querySelector(s);
 const fmt = (v, d = 4) => (v === null || v === undefined || !Number.isFinite(v) ? "—" : (+v).toPrecision(d));
@@ -178,10 +179,11 @@ function windingFor(hash, spec) {
 
 /* Plan view: the machine looked at down the shaft, both halves of it.
  *
- * The pole footprints are traced through exactly the curve code the rasterizer used, at the height
- * the loft makes widest and narrowest, so a flare shows as two outlines rather than having to be
- * imagined. The coils are the real routed turns, coloured by phase — not a sketch of a coil, the
- * same polygons that became Biot-Savart segments.
+ * The pole footprints are traced through exactly the curve code the rasterizer used, at the gap face
+ * and at the yoke, so a flare shows as two outlines rather than having to be imagined — plus the
+ * interior section when the loft reaches outside that pair, which a Bezier against height routinely
+ * does. The coils are the real routed turns, coloured by phase — not a sketch of a coil, the same
+ * polygons that became Biot-Savart segments.
  *
  * `state.layers` picks which halves are drawn. Over each other the rotor is dropped to a wash so the
  * copper under it stays legible; alone, each is drawn at full strength. The stator annulus and the
@@ -231,18 +233,23 @@ function drawPlan(canvas, spec, hash) {
   let curve = null;
   try { curve = footprintCurve(r.poleCurve); } catch { curve = null; }
 
-  /* Two heights: the gap face and the yoke. On a constant sweep they coincide and one outline is
-   * drawn; on a flared or twisted one the pair is the whole point. */
+  /* The heights worth drawing: the gap face, the yoke, and — when the loft reaches outside the pair
+   * — the interior section that does. See `loft.js` for why the last one is not optional: a pole
+   * that bulges at mid-height and returns to its original size has two *identical* face outlines,
+   * and drawing only those would show it as having no loft at all. */
   /* Over the copper the iron goes neutral, not just faint: the pole colour and phase A are both red,
    * and at 50 % alpha a pole outline and a coil of phase A are indistinguishable. Drawn alone it
    * keeps the warn colour it has everywhere else in the tool, including the loft panel beside it. */
   const wash = state.layers === "both" ? 0.45 : 1;
   const iron = state.layers === "both" ? css("--ink") : css("--warn");
-  const heights = showPoles ? (loft ? [0, 1] : [0]) : [];
+  const heights = !showPoles ? []
+    : curve ? loftHeights(curve, curveFrame({ r0: Rri, r1: Rro, centre: 0, count: poles }), loft)
+    : [{ s: 0, kind: "face" }];
+  const extreme = heights.find(x => x.kind === "extreme") || null;
   for (let hi = 0; hi < heights.length; hi++) {
-    const sH = heights[hi];
+    const sH = heights[hi].s, dotted = heights[hi].kind === "extreme";
     g.lineWidth = hi === 0 ? 2 : 1;
-    g.setLineDash(hi === 0 ? [] : [4, 3]);
+    g.setLineDash(hi === 0 ? [] : dotted ? [1, 3] : [4, 3]);
     g.strokeStyle = hi === 0 ? iron : css("--muted");
     g.fillStyle = iron; g.globalAlpha = hi === 0 ? 0.13 * wash : 0;
     for (let p = 0; p < poles; p++) {
@@ -294,7 +301,10 @@ function drawPlan(canvas, spec, hash) {
     }
     g.fillStyle = css("--muted");
   }
-  if (showPoles && loft) g.fillText("solid: gap face    dashed: yoke", 8, line);
+  if (showPoles && loft)
+    g.fillText("solid: gap face    dashed: yoke" +
+               (extreme ? `    dotted: ${(extreme.s * 100).toFixed(0)}% height, reaches ` +
+                          `${extreme.deviation_mm.toFixed(2)} mm outside both` : ""), 8, line);
 }
 
 function arcOutline(ri, ro, centre, span) {
