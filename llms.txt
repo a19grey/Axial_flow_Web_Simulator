@@ -1,0 +1,119 @@
+# Axial-Flux Web Simulator
+
+> A client-side 3D magnetostatic field solver and design test bed for axial-flux
+> electric machines. It computes the field, torque, gap flux and losses on the GPU,
+> renders the machine in 3D, and runs overnight shape-optimization studies.
+> Static files only: no server, no build step, no API key, nothing to install.
+
+If you are an agent and want to *use* the solver rather than read about it, you do
+not need a REST endpoint — there isn't one. The solver is JavaScript that runs in
+the browser, and its whole interface is the object `window.AFS`. You drive it by
+loading a page in a WebGPU-capable browser and calling methods on that object.
+
+## Pages
+
+- [headless.html](./headless.html): the solver with no interface. Load this one.
+  It defines `window.AFS`, fires an `afs-ready` event, and prints the adapter it
+  got. Nothing else renders, so it costs no GPU time you did not ask for.
+- [index.html](./index.html): the full tool, for humans. It loads the *same*
+  module, so `window.AFS` is present here too and behaves identically — handy if
+  you want to watch what a driver is doing. `index.html?autosolve=0` stops it
+  solving its default design on load.
+- [runs.html](./runs.html): a viewer for completed optimization runs. It never
+  solves; it redraws each design from its own saved spec. Its own "About" panel
+  explains every number it prints, and every label carries a tooltip.
+
+## Requirements
+
+WebGPU in a secure context. Recent Chrome or Edge, or Safari 26+. Headless Chrome
+needs `--enable-unsafe-webgpu --use-angle=default`, and will silently fall back to
+the SwiftShader *software* adapter if it cannot get a real GPU — correct fields,
+meaningless timings. Always check `capabilities().software` before trusting a
+number that has a unit of seconds.
+
+## The API
+
+The methods split into two groups with **different error contracts**. This is the one thing to get
+right before you write a driver.
+
+**Inspection — cheap, returns its value directly, throws on an invalid design.**
+
+```js
+await window.AFS.capabilities()   // adapter, limits, API and spec versions, .software flag
+await window.AFS.plan(spec)       // cells, memory, gap resolution, whether it fits — no solve
+window.AFS.defaultSpec()          // a valid spec to start from
+window.AFS.normalizeSpec(spec)    // fill defaults, migrate an older version
+window.AFS.specHash(spec)         // the content hash a study caches on
+window.AFS.cases()                // the validation cases and their references
+```
+
+**Work — costs GPU time, never rejects, always returns `{ok: true, value}` or `{ok: false, error}`.**
+
+```js
+await window.AFS.solve(spec)           // the field, torque, gap flux
+await window.AFS.score(spec)           // one design scored at its own best operating point
+await window.AFS.sweep(spec, sweepSpec)
+await window.AFS.convergence(spec)     // the same problem at several resolutions
+await window.AFS.validate("all")       // the analytic and benchmark suite
+await window.AFS.virtualWork(spec)     // torque again, by an independent method
+await window.AFS.inductance(spec)      // L matrix, Ld/Lq, reciprocity check
+await window.AFS.torqueVsAngle(spec)   // ripple, harmonics, core loss
+await window.AFS.energyCheck(spec)     // stored energy, two ways
+```
+
+Errors come back as values in the second group because a rejected promise does not survive the
+browser-automation boundary intact. The first group predates that convention and still throws, so
+wrap `plan` and `capabilities` in your own `try`/`catch` — `page.evaluate(() =>
+AFS.capabilities().catch(e => ({error: e.message})))` is what this repo's own driver does.
+
+Long calls publish progress to `AFS.progress` and, if the page defines one, call
+`window.__afsProgress(ev)`, which is how the CLI streams status to a terminal.
+
+## The spec
+
+One versioned JSON object is the only input to a solve, used identically by the
+page and by the command line, so an on-screen result and a headless result come
+from one code path rather than two that agree. Every numeric field carries its
+unit in its name (`airGap_mm`, `peakCurrent_A`). Start from
+`AFS.defaultSpec()` and override fields; `AFS.normalizeSpec` validates and
+migrates, `AFS.specHash` gives the content hash a study caches on.
+
+One trap: **unknown keys are ignored, not rejected.** `plan({garbage: true})` returns a perfectly
+good plan for the *default* design, because normalization filled in everything you did not supply.
+A misspelled path is therefore silent. Values that are physically impossible *do* throw
+(`outerRadius_mm` below `innerRadius_mm` gives "Outer radius must exceed inner radius by at least
+4 mm"), so the check to run is: set the field, then read it back with `AFS.getPathOn(spec, path)`,
+or compare `AFS.specHash` before and after.
+
+## Command line
+
+The repository ships a Playwright driver that does all of the above for you:
+
+```sh
+git clone https://github.com/a19grey/Axial_flow_Web_Simulator
+cd axialflow && npm run setup
+node cli/run.js capabilities
+node cli/run.js solve src/cases/scale-370mm.json -o out.json
+node cli/run.js validate
+node cli/study.js studies/codesign-both-halves.json   # an overnight study
+```
+
+Progress goes to stderr and JSON to stdout, so results pipe cleanly. The driver
+refuses a software adapter unless given `--allow-software`.
+
+## Documentation
+
+- [README.md](https://github.com/a19grey/Axial_flow_Web_Simulator/blob/main/README.md): the whole tool
+- [docs/numerics.md](https://github.com/a19grey/Axial_flow_Web_Simulator/blob/main/docs/numerics.md): meshes, preconditioners, measured scaling, what runs where
+- [docs/limitations.md](https://github.com/a19grey/Axial_flow_Web_Simulator/blob/main/docs/limitations.md): what it cannot do, stated plainly
+- [docs/runs.md](https://github.com/a19grey/Axial_flow_Web_Simulator/blob/main/docs/runs.md): how an optimization run is organized, and how to read one
+- [docs/geometry-plan.md](https://github.com/a19grey/Axial_flow_Web_Simulator/blob/main/docs/geometry-plan.md): the shape language designs are written in
+- [docs/optimization-plan.md](https://github.com/a19grey/Axial_flow_Web_Simulator/blob/main/docs/optimization-plan.md): how a study searches
+
+## What to distrust
+
+Timings from a software adapter. Any torque whose two Maxwell-stress surfaces
+disagree by more than a few percent. Any score whose design sits on a bound of its
+search box. Permeabilities above about 200, where the reduced scalar potential
+loses precision in f32 — the solver reports the fraction of cells clamped, and you
+should read it.

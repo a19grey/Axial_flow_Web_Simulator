@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<link rel="alternate" type="text/plain" title="llms.txt — how an agent drives this tool" href="./llms.txt">
 <title>Axial-flux solver — headless</title>
 <style>
   body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 24px; max-width: 70ch; color: #17202B; background: #E8ECF1 }
@@ -14,10 +15,17 @@
 <p>No interface. This page exists so a script can drive the solver without the 3D view or the
 controls. The API is on <code>window.AFS</code> and is the same module the full page uses.</p>
 <pre id="status">loading…</pre>
-<p>From a driver: <code>await window.AFS.solve(spec)</code>, <code>.sweep(spec, sweepSpec)</code>,
-<code>.validate("all")</code>, <code>.plan(spec)</code>, <code>.capabilities()</code>. Each returns
-<code>{ok, value}</code> or <code>{ok:false, error}</code>.</p>
+<p>From a driver: <code>await window.AFS.solve(spec)</code>, <code>.score(spec)</code>,
+<code>.sweep(spec, sweepSpec)</code>, <code>.validate("all")</code>. Each of these costs GPU time and
+returns <code>{ok, value}</code> or <code>{ok:false, error}</code> rather than rejecting, because a
+rejected promise does not survive the automation boundary.</p>
+<p><code>.plan(spec)</code>, <code>.capabilities()</code>, <code>.cases()</code> and
+<code>.defaultSpec()</code> are cheap inspection calls and are the exception: they return their value
+directly and <em>throw</em> on an invalid design, so catch them yourself.</p>
 <p>The command-line driver is <code>node cli/run.js</code> in this repository.</p>
+<p>Full description of the API, the spec and what to distrust: <a href="./llms.txt">llms.txt</a>.
+The same <code>window.AFS</code> is also defined on <a href="./index.html">the full page</a>, so a
+driver can watch itself work.</p>
 
 <script type="module">
 import AFS from "./src/afs.js";

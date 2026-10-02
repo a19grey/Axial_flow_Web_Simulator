@@ -22,6 +22,7 @@ npm test               # all four suites
 axialflow/
   index.html      the tool
   headless.html   the same solver with no interface, exposing window.AFS
+  llms.txt        what this is and how to drive it, for an agent that lands here
   cli/run.js      a Playwright driver for the headless page
 ```
 
@@ -83,7 +84,28 @@ The driver refuses to run on a software WebGPU adapter unless given `--allow-sof
 produces correct fields but meaningless timings, and headless Chrome will silently fall back to it.
 
 **Hosting.** Copy the folder to any static host and open `index.html`. There is no build step, so
-what you develop against is what ships.
+what you develop against is what ships. The public instance is
+<https://greylabs86.com/axialflow/>.
+
+## If you are an agent
+
+There is no REST endpoint and no key to get. The solver is JavaScript that runs in a WebGPU browser,
+and its whole interface is the object `window.AFS`. Three paths in, in order of how little you need
+to know first:
+
+| | |
+|---|---|
+| `…/axialflow/llms.txt` | the API, the spec, and what to distrust, in plain text. **Start here.** |
+| `…/axialflow/headless.html` | the page to load. Defines `window.AFS`, renders nothing, fires `afs-ready`. |
+| `…/axialflow/index.html` | the full tool. Loads the *same* module, so `window.AFS` works here too. |
+
+`llms.txt` is linked from the `<head>` of every page as
+`<link rel="alternate" type="text/plain">` and from every footer, so an agent that arrives at any URL
+on the site can find it without being told. Swap the host for `http://localhost:8080` and the same
+three paths work against a local `npm start`.
+
+The site is static, so loading a page is the only setup; `cli/run.js` is a convenience that does the
+Playwright part for you, not a requirement.
 
 ## The spec
 
@@ -561,6 +583,7 @@ See `docs/limitations.md` for the full statement. In short:
     runs.html                      the run viewer's page
     studies/                       study specs: variables, objective, gates, stages
     cli/                           headless drivers: run.js one command, study.js a night, frames.js a movie
+    ml/                            surrogate models fitted to run archives (Python, uv) — see ml/README.md
     tests/                         suites, the frozen reference build, golden files
     docs/                          physics, numerics, schema, limitations
 

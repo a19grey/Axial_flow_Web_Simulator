@@ -13,6 +13,8 @@
  *   study       scoring a design: the operating-point algebra, the gates, the shape ladder, the archive
  *   runview     the run viewer: that every term it prints is defined, and that the design vector
  *               documents itself from the study's own declaration (no GPU)
+ *   agent-entry the hosted site's agent entry points: that llms.txt is findable from every page
+ *               and that what it says about window.AFS is true on both pages
  *
  * Exits non-zero if any suite fails, so CI can gate on it.
  */
@@ -31,7 +33,8 @@ const SUITES = [
   { name: "metrics", cmd: ["tests/metrics.js", "--out", "tests/out/metrics.json"], note: "derived metrics and the cross-checks between them" },
   { name: "geometry", cmd: ["tests/geometry.js", "--out", "tests/out/geometry.json"], note: "the geometry language, CPU only" },
   { name: "study", cmd: ["tests/study.js", "--out", "tests/out/study.json"], note: "scoring a design, and the search that uses the score" },
-  { name: "runview", cmd: ["tests/runview.js", "--out", "tests/out/runview.json"], note: "the run viewer explains every number it prints" }
+  { name: "runview", cmd: ["tests/runview.js", "--out", "tests/out/runview.json"], note: "the run viewer explains every number it prints" },
+  { name: "agent-entry", cmd: ["tests/agent-entry.js", "--out", "tests/out/agent-entry.json"], note: "an agent given only the URL can find the API, and it behaves as documented" }
 ];
 
 function run(script, extra) {

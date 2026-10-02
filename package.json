@@ -21,6 +21,7 @@
     "test:metrics": "node tests/run-tests.js --only metrics",
     "test:geometry": "node tests/run-tests.js --only geometry",
     "test:study": "node tests/run-tests.js --only study",
+    "test:agent-entry": "node tests/run-tests.js --only agent-entry",
     "study": "node cli/study.js run",
     "frames": "node cli/frames.js",
     "runs": "node cli/study.js list"

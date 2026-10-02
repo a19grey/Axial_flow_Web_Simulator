@@ -52,6 +52,13 @@ jobs:
         timeout-minutes: 3
         run: node tests/runview.js
 
+      # The agent entry points: that llms.txt is reachable from every page and that what it claims
+      # about window.AFS is true on both pages. Nothing here solves, so the software adapter is not
+      # a degraded run of this suite — it is the same run, in about a second.
+      - name: Agent entry points
+        timeout-minutes: 3
+        run: node tests/agent-entry.js --force-software --allow-software
+
       - name: Full-page smoke test
         timeout-minutes: 8
         run: node tests/smoke-ui.js --allow-software

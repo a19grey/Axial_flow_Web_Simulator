@@ -3,6 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Client-side 3D magnetostatic field solver and design test bed for axial-flux machines. Runs in the browser on WebGPU; the same solver is agent-drivable through window.AFS.">
+<!-- This page is agent-drivable. window.AFS is the whole interface, and is defined here as well as
+     on headless.html. llms.txt describes it; both links below are machine-readable on purpose. -->
+<link rel="alternate" type="text/plain" title="llms.txt — how an agent drives this tool" href="./llms.txt">
+<link rel="alternate" title="Headless: the same solver with no interface" href="./headless.html">
 <title>Axial-flux 3D field solver — WebGPU</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -321,6 +326,8 @@ details summary{cursor:pointer;font-size:14px;font-weight:600;margin-top:14px}
   <span>A <a href="https://greylabs86.com">Grey Labs</a> project</span>
   <span><a href="https://github.com/a19grey/Axial_flow_Web_Simulator">Source on GitHub</a></span>
   <span><a href="./runs.html">Optimization runs</a></span>
+  <span><a href="./headless.html" title="The same solver with no interface. Defines window.AFS, which is also defined on this page.">Headless</a></span>
+  <span><a href="./llms.txt" title="A plain-text description of this tool and its API, written for agents.">llms.txt</a></span>
 </footer>
 
 <script type="module" src="./src/ui/app.js"></script>

@@ -93,7 +93,8 @@ if (process.argv[1] && /serve\.js$/.test(process.argv[1])) {
       `\n  Axial-flux simulator\n\n` +
       `    tool      ${url}\n` +
       `    runs      ${url}runs.html\n` +
-      `    headless  ${url}headless.html\n\n` +
+      `    headless  ${url}headless.html\n` +
+      `    agents    ${url}llms.txt\n\n` +
       `  Serving ${REPO_ROOT}\n  Runs    ${runsRoot}\n  Ctrl-C to stop.\n\n`);
     if (flag("open", false)) spawn("open", [url], { stdio: "ignore", detached: true }).unref();
   });
